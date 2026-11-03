@@ -1,5 +1,5 @@
 // 程式檔案先存在手機，開啟時不重新下載；改版時記得更新 VERSION。
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `shopping-list-${VERSION}`;
 const ASSETS = [
   './',
@@ -20,7 +20,9 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
+  // 略過瀏覽器的 HTTP 快取，避免改版時新舊檔案混在一起。
+  const requests = ASSETS.map((url) => new Request(url, { cache: 'reload' }));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(requests)));
 });
 
 self.addEventListener('activate', (event) => {

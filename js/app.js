@@ -28,6 +28,8 @@ const state = {
 const CHECK_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 const PHOTO_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
 const CLOSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg>';
+const LONG_PRESS_MS = 450;
 
 const country = () => getCountry(state.trip.countryCode);
 const money = (value) => formatMoney(value, country());
@@ -135,8 +137,10 @@ function itemRow(item) {
     <article class="item ${item.purchased ? 'done' : ''}">
       <button type="button" class="check" data-action="toggle" data-id="${esc(item.id)}"
         aria-pressed="${item.purchased}" aria-label="${item.purchased ? '改成未買' : '標記已買'}：${esc(product?.name)}">${CHECK_ICON}</button>
+      ${thumb
+        ? `<button type="button" class="thumb-btn zoomable" data-action="photo" data-photo="${esc(item.photoId)}" aria-label="看大圖：${esc(product?.name)}"><img class="thumb" src="${thumb}" alt=""></button>`
+        : `<button type="button" class="thumb-btn" data-action="edit-item" data-id="${esc(item.id)}" aria-label="編輯：${esc(product?.name)}"><span class="thumb thumb-empty">${PHOTO_ICON}</span></button>`}
       <button type="button" class="item-main" data-action="edit-item" data-id="${esc(item.id)}">
-        ${thumb ? `<img class="thumb" src="${thumb}" alt="">` : `<span class="thumb thumb-empty">${PHOTO_ICON}</span>`}
         <span class="item-text">
           <span class="item-name">${esc(product?.name)}</span>
           ${product?.foreignName ? `<span class="item-foreign" lang="ja">${esc(product.foreignName)}</span>` : ''}
@@ -146,7 +150,17 @@ function itemRow(item) {
           ${unit == null ? '未填價' : money(unit)}
         </span>
       </button>
+      ${item.purchased ? `<button type="button" class="item-delete" data-action="delete-item" data-id="${esc(item.id)}" aria-label="刪除：${esc(product?.name)}">${TRASH_ICON}</button>` : ''}
     </article>`;
+}
+
+function checkedBar() {
+  const count = state.items.filter((i) => i.purchased).length;
+  if (!count) return '';
+  return `<div class="selection-bar">
+    <span>已勾選 <b>${count}</b> 樣</span>
+    <button type="button" class="btn btn-small btn-danger" data-action="delete-checked">刪除已勾選</button>
+  </div>`;
 }
 
 function emptyList() {
@@ -160,6 +174,8 @@ function emptyList() {
 function renderList() {
   const hasSamples = state.items.some((i) => i.sample);
   const c = country();
+  // 分類裡的品項都刪光時，回到全部，免得畫面只剩「找不到」。
+  if (state.cat !== 'all' && !state.items.some((i) => state.products.get(i.productId)?.categoryId === state.cat)) state.cat = 'all';
   $('#view').innerHTML = `
     ${installBanner()}
     ${backupBanner()}
@@ -209,7 +225,7 @@ function renderListBody() {
     body.innerHTML = '<div class="empty-state"><h2>找不到符合的品項</h2><p>試試其他關鍵字，或調整上方的篩選。</p></div>';
     return;
   }
-  body.innerHTML = c.categories
+  body.innerHTML = checkedBar() + c.categories
     .map((cat) => {
       const rows = visible.filter((i) => getCategory(c, state.products.get(i.productId)?.categoryId).id === cat.id);
       if (!rows.length) return '';
@@ -230,7 +246,7 @@ function renderStores() {
     groups.get(key).push(item);
   }
   const ordered = [...groups.entries()].sort(([a], [b]) => (a === 'none') - (b === 'none'));
-  $('#view').innerHTML = ordered
+  $('#view').innerHTML = checkedBar() + ordered
     .map(([key, items]) => {
       const s = summarize(items, country());
       const name = key === 'none' ? '未指定店家' : state.stores.get(key)?.name;
@@ -352,10 +368,11 @@ async function renderSettings() {
       <h2 class="panel-title">備份</h2>
       <p class="muted">上次備份：${esc(formatDateTime(state.meta.lastBackupAt))}${hasUnsavedBackup() ? '，之後有變更尚未備份' : ''}</p>
       <div class="btn-row">
-        <button type="button" class="btn btn-primary" data-action="backup-prompt">備份到 Google 雲端</button>
+        <button type="button" class="btn btn-primary" data-action="backup-prompt">備份到手機</button>
         <button type="button" class="btn" data-action="import">從備份匯入</button>
         ${state.meta.canUndoImport ? '<button type="button" class="btn" data-action="undo-import">復原上次匯入</button>' : ''}
       </div>
+      <p class="muted fine">備份檔存在手機裡，刪除 App 後還能匯入；手機遺失或損壞時就救不回來。</p>
       <p class="muted fine" id="storage-info"></p>
     </section>
 
@@ -442,7 +459,7 @@ async function openItemSheet(id) {
     ${sheetHeader(item ? '編輯品項' : '新增品項')}
     <form id="item-form" novalidate>
       <div class="photo-field">
-        <div id="photo-preview" class="photo-preview">${existingThumb ? `<img src="${existingThumb}" alt="商品照片">` : PHOTO_ICON}</div>
+        <button type="button" id="photo-preview" class="photo-preview zoomable" aria-label="看大圖">${existingThumb ? `<img src="${existingThumb}" alt="商品照片">` : PHOTO_ICON}</button>
         <div class="photo-actions">
           <label class="btn" for="f-photo">${existingThumb ? '更換照片' : '加照片'}</label>
           <input id="f-photo" class="sr-only" type="file" accept="image/*">
@@ -537,6 +554,11 @@ async function openItemSheet(id) {
     }
   });
 
+  $('#photo-preview', sheet).addEventListener('click', () => {
+    if (draftPhoto) openPhoto({ blob: draftPhoto.full });
+    else if (item?.photoId && !removePhoto) openPhoto({ id: item.photoId });
+  });
+
   $('#remove-photo', sheet).addEventListener('click', () => {
     draftPhoto = null;
     removePhoto = true;
@@ -609,6 +631,36 @@ async function openItemSheet(id) {
   });
 }
 
+// ---- 看大圖 ----
+
+let openingPhoto = false;
+
+// 點一下和長按都會走到這裡，長按放開後的點擊不會再開第二次。
+async function openPhoto({ id, blob }) {
+  const dialog = $('#photo');
+  if (dialog.open || openingPhoto) return;
+  openingPhoto = true;
+  try {
+    const full = blob ?? (await get('photos', id))?.full;
+    if (!full) {
+      showToast('找不到這張照片的大圖');
+      return;
+    }
+    const url = URL.createObjectURL(full);
+    dialog.innerHTML = `
+      <button type="button" class="viewer-close" id="viewer-close">關閉</button>
+      <img class="viewer-img" src="${url}" alt="商品照片">`;
+    dialog.onclose = () => {
+      URL.revokeObjectURL(url);
+      dialog.innerHTML = '';
+    };
+    dialog.showModal();
+    $('#viewer-close', dialog).onclick = () => dialog.close();
+  } finally {
+    openingPhoto = false;
+  }
+}
+
 // ---- 給店員看 ----
 
 async function openClerk(id) {
@@ -647,14 +699,14 @@ async function openBackupPrompt() {
   if (state.meta.changes > 0) changes.push(`${state.meta.changes} 筆變更`);
   if (state.meta.photoChanges > 0) changes.push(`${state.meta.photoChanges} 張照片`);
   openSheet(`
-    ${sheetHeader('備份到 Google 雲端')}
+    ${sheetHeader('備份到手機')}
     <p class="lead">${changes.length ? `有 ${changes.join('、')}還沒備份` : '目前的資料都已備份'}</p>
     <dl class="facts">
       <div><dt>上次備份</dt><dd>${esc(formatDateTime(state.meta.lastBackupAt))}</dd></div>
       <div><dt>完整備份</dt><dd>約 ${backup.formatBytes(size.fullBytes)}（${size.photoCount} 張照片）</dd></div>
       <div><dt>只備份文字</dt><dd>約 ${backup.formatBytes(size.textBytes)}</dd></div>
     </dl>
-    <p class="muted">建議連上 Wi-Fi 後再做完整備份。檔案只有在你按下後才會上傳。</p>
+    <p class="muted">備份檔會存在手機裡，不會上傳。手機遺失或損壞時，這份備份也救不回來。</p>
     <div class="stack">
       <button type="button" class="btn btn-primary" data-action="prepare-backup" data-photos="1">立即備份</button>
       <button type="button" class="btn" data-action="prepare-backup" data-photos="0">只備份文字</button>
@@ -680,9 +732,9 @@ async function prepareBackup(includePhotos) {
       <div><dt>大小</dt><dd>${backup.formatBytes(file.size)}</dd></div>
     </dl>
     ${canShare
-      ? '<p class="muted">按下後會開啟分享選單，請選「Google 雲端硬碟」。如果沒看到，也可以選「儲存到檔案」，再選 Google 雲端硬碟。</p>'
-      : '<p class="muted">這個瀏覽器不支援分享選單，會改成下載檔案，請再自行上傳到 Google 雲端。</p>'}
-    <div class="stack"><button type="button" class="btn btn-primary" id="send-backup">${canShare ? '存到 Google 雲端' : '下載備份檔'}</button></div>`);
+      ? '<p class="muted">按下後會開啟分享選單，請選「儲存到檔案」，再選「我的 iPhone」裡的資料夾。</p>'
+      : '<p class="muted">按下後會下載到手機的「下載」資料夾，刪除前請先確認不再需要。</p>'}
+    <div class="stack"><button type="button" class="btn btn-primary" id="send-backup">${canShare ? '存到手機' : '下載備份檔'}</button></div>`);
 
   $('#send-backup', sheet).addEventListener('click', async () => {
     try {
@@ -703,7 +755,8 @@ async function prepareBackup(includePhotos) {
     await backup.markBackedUp(includePhotos);
     closeSheet();
     await refresh();
-    showToast(includePhotos ? '已交給分享選單，請到 Google 雲端確認檔案' : '文字已交給分享選單，照片還沒備份');
+    const where = canShare ? '請到「檔案」App 確認' : '請到「下載」資料夾確認';
+    showToast(includePhotos ? `已備份，${where}` : `文字已備份，照片還沒備份，${where}`);
   });
 }
 
@@ -793,14 +846,20 @@ function openCopySheet() {
 
 function openInstallHelp() {
   openSheet(`
-    ${sheetHeader('加到 iPhone 主畫面')}
+    ${sheetHeader('加到主畫面')}
+    <h3 class="steps-title">iPhone</h3>
     <ol class="steps">
       <li>用 <b>Safari</b> 開啟這個網址。</li>
       <li>點畫面下方的<b>分享</b>按鈕。</li>
       <li>選<b>加入主畫面</b>，再按<b>新增</b>。</li>
-      <li>之後都從主畫面的圖示開啟。</li>
     </ol>
-    <p class="muted">Safari 和主畫面 App 的資料是分開的。如果已經在 Safari 裡輸入資料，請先備份，再到主畫面 App 匯入。</p>`);
+    <h3 class="steps-title">Android</h3>
+    <ol class="steps">
+      <li>用 <b>Chrome</b> 開啟這個網址。</li>
+      <li>點右上角的<b>選單</b>（三個點）。</li>
+      <li>選<b>安裝應用程式</b>或<b>加到主畫面</b>，再按確認。</li>
+    </ol>
+    <p class="muted">之後都從主畫面的圖示開啟。瀏覽器和主畫面 App 的資料可能是分開的；如果已經在瀏覽器裡輸入資料，請先備份，再到主畫面 App 匯入。</p>`);
 }
 
 async function updateRateOnline() {
@@ -855,6 +914,23 @@ const actions = {
   tab: (el) => { state.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   'add-item': () => openItemSheet(null),
   'edit-item': (el) => openItemSheet(el.dataset.id),
+  photo: (el) => openPhoto({ id: el.dataset.photo }),
+  'delete-item': async (el) => {
+    const name = state.products.get(state.items.find((i) => i.id === el.dataset.id)?.productId)?.name;
+    const ok = await confirmDialog({ title: `刪除「${name}」？`, body: '照片和價格紀錄會一起刪除，也不會再算進花費。', ok: '刪除', danger: true });
+    if (!ok) return;
+    await model.deleteItem(el.dataset.id);
+    await refresh();
+    showToast('已刪除');
+  },
+  'delete-checked': async () => {
+    const checked = state.items.filter((i) => i.purchased);
+    const ok = await confirmDialog({ title: `刪除已勾選的 ${checked.length} 樣？`, body: '照片和價格紀錄會一起刪除，也不會再算進花費。', ok: '刪除', danger: true });
+    if (!ok) return;
+    for (const item of checked) await model.deleteItem(item.id);
+    await refresh();
+    showToast(`已刪除 ${checked.length} 樣`);
+  },
   toggle: async (el) => { await model.togglePurchased(el.dataset.id, state.trip); await refresh(); },
   status: (el) => { state.status = el.dataset.value; renderList(); },
   cat: (el) => { state.cat = state.cat === el.dataset.value ? 'all' : el.dataset.value; renderList(); },
@@ -888,6 +964,21 @@ const actions = {
 document.addEventListener('click', (event) => {
   const el = event.target.closest('[data-action]');
   if (el) actions[el.dataset.action]?.(el);
+});
+
+// 長按縮圖：擋掉系統放大縮圖的預覽，改開清晰的大圖。
+let pressTimer;
+document.addEventListener('pointerdown', (event) => {
+  const el = event.target.closest('.zoomable');
+  if (!el) return;
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(() => el.click(), LONG_PRESS_MS);
+});
+for (const type of ['pointerup', 'pointercancel']) {
+  document.addEventListener(type, () => clearTimeout(pressTimer));
+}
+document.addEventListener('contextmenu', (event) => {
+  if (event.target.closest('.zoomable')) event.preventDefault();
 });
 
 $('#view').addEventListener('change', (event) => {
