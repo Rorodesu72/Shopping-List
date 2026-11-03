@@ -341,7 +341,8 @@ dialog::backdrop { background: rgb(8 12 28 / 0.55); }
   align-self: flex-end; min-height: 44px; padding: 8px 16px;
   background: #1b2a58; color: #fff; border: 0; border-radius: 8px; font-size: 16px; font-weight: 700;
 }
-.clerk-photo { width: 100%; max-height: 48dvh; object-fit: contain; border-radius: 10px; background: #f0f2f7; pointer-events: none; -webkit-user-drag: none; -webkit-touch-callout: none; }
+.clerk-photo-btn { flex: none; display: block; width: 100%; padding: 0; background: none; border: 0; border-radius: 10px; }
+.clerk-photo { display: block; width: 100%; max-height: 48dvh; object-fit: contain; border-radius: 10px; background: #f0f2f7; pointer-events: none; -webkit-user-drag: none; -webkit-touch-callout: none; }
 .clerk-body { display: flex; flex-direction: column; gap: 10px; }
 .clerk-name { font-size: clamp(30px, 9vw, 48px); font-weight: 800; line-height: 1.2; }
 .clerk-sub { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }

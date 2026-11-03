@@ -686,7 +686,7 @@ async function openClerk(id) {
   const phrases = country().clerkPhrases;
   dialog.innerHTML = `
     <button type="button" class="clerk-close" id="clerk-close">關閉</button>
-    ${url ? `<img class="clerk-photo" src="${url}" alt="${esc(product?.name)}">` : ''}
+    ${url ? `<button type="button" class="clerk-photo-btn zoomable" data-action="photo" data-photo="${esc(item.photoId)}" aria-label="看大圖"><img class="clerk-photo" src="${url}" alt="${esc(product?.name)}"></button>` : ''}
     <div class="clerk-body" lang="ja">
       <p class="clerk-name">${esc(product?.foreignName || product?.name)}</p>
       <p class="clerk-sub">${esc([label, `× ${item.qty}`].filter(Boolean).join('　'))}</p>
