@@ -30,6 +30,7 @@ const PHOTO_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l
 const CLOSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg>';
 const LONG_PRESS_MS = 450;
+const DECODE_WAIT_MS = 200;
 
 const country = () => getCountry(state.trip.countryCode);
 const money = (value) => formatMoney(value, country());
@@ -647,14 +648,23 @@ async function openPhoto({ id, blob }) {
       return;
     }
     const url = URL.createObjectURL(full);
+    // 盡量等圖片解碼完才顯示，但不讓使用者等太久；圖框大小固定，晚一點出現也不會變形。
+    const image = new Image();
+    image.className = 'viewer-img';
+    image.alt = '商品照片';
+    image.src = url;
+    await Promise.race([image.decode().catch(() => {}), new Promise((resolve) => setTimeout(resolve, DECODE_WAIT_MS))]);
     dialog.innerHTML = `
       <button type="button" class="viewer-close" id="viewer-close">關閉</button>
-      <img class="viewer-img" src="${url}" alt="商品照片">`;
+      <div class="viewer-stage" tabindex="-1" autofocus></div>`;
+    $('.viewer-stage', dialog).append(image);
     dialog.onclose = () => {
+      if (dialog.open) return;
       URL.revokeObjectURL(url);
       dialog.innerHTML = '';
     };
     dialog.showModal();
+    window.getSelection()?.removeAllRanges();
     $('#viewer-close', dialog).onclick = () => dialog.close();
   } finally {
     openingPhoto = false;
