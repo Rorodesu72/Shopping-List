@@ -652,6 +652,7 @@ async function openPhoto({ id, blob }) {
     const image = new Image();
     image.className = 'viewer-img';
     image.alt = '商品照片';
+    image.draggable = false;
     image.src = url;
     await Promise.race([image.decode().catch(() => {}), new Promise((resolve) => setTimeout(resolve, DECODE_WAIT_MS))]);
     dialog.innerHTML = `
@@ -988,7 +989,7 @@ for (const type of ['pointerup', 'pointercancel']) {
   document.addEventListener(type, () => clearTimeout(pressTimer));
 }
 document.addEventListener('contextmenu', (event) => {
-  if (event.target.closest('.zoomable')) event.preventDefault();
+  if (event.target.closest('.zoomable, .viewer, .clerk')) event.preventDefault();
 });
 
 $('#view').addEventListener('change', (event) => {

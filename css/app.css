@@ -341,7 +341,7 @@ dialog::backdrop { background: rgb(8 12 28 / 0.55); }
   align-self: flex-end; min-height: 44px; padding: 8px 16px;
   background: #1b2a58; color: #fff; border: 0; border-radius: 8px; font-size: 16px; font-weight: 700;
 }
-.clerk-photo { width: 100%; max-height: 48dvh; object-fit: contain; border-radius: 10px; background: #f0f2f7; }
+.clerk-photo { width: 100%; max-height: 48dvh; object-fit: contain; border-radius: 10px; background: #f0f2f7; pointer-events: none; -webkit-user-drag: none; -webkit-touch-callout: none; }
 .clerk-body { display: flex; flex-direction: column; gap: 10px; }
 .clerk-name { font-size: clamp(30px, 9vw, 48px); font-weight: 800; line-height: 1.2; }
 .clerk-sub { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -363,7 +363,8 @@ dialog::backdrop { background: rgb(8 12 28 / 0.55); }
 }
 .viewer-stage { position: relative; flex: 1; min-height: 0; }
 .viewer-stage:focus { outline: none; }
-.viewer-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+/* 手指還按著時大圖就會開啟，不讓 iOS 對圖片啟動拖曳預覽，否則圖片會被拉成圖框大小 */
+.viewer-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; -webkit-user-drag: none; }
 
 .toast {
   position: fixed; z-index: 20;
