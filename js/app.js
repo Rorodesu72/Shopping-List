@@ -157,7 +157,8 @@ function itemRow(item, number = null) {
   const photoIds = model.photoIdsOf(item).filter((pid) => state.thumbs.has(pid));
   const thumb = photoIds.length ? state.thumbs.get(photoIds[0]) : null;
   return `
-    <article class="item ${item.purchased ? 'done' : ''}">
+    <article class="item ${item.purchased ? 'done' : ''} ${number ? 'numbered' : ''}">
+      ${number ? `<span class="item-no" aria-label="第 ${number} 樣">${number}</span>` : ''}
       <button type="button" class="check" data-action="toggle" data-id="${esc(item.id)}"
         aria-pressed="${item.purchased}" aria-label="${item.purchased ? '改成未買' : '標記已買'}：${esc(product?.name)}">${CHECK_ICON}</button>
       ${thumb
@@ -165,7 +166,7 @@ function itemRow(item, number = null) {
         : `<button type="button" class="thumb-btn" data-action="edit-item" data-id="${esc(item.id)}" aria-label="編輯：${esc(product?.name)}"><span class="thumb thumb-empty">${PHOTO_ICON}</span></button>`}
       <button type="button" class="item-main" data-action="edit-item" data-id="${esc(item.id)}">
         <span class="item-text">
-          <span class="item-name">${number ? `<span class="item-no" aria-label="第 ${number} 樣">${number}</span>` : ''}${esc(product?.name)}</span>
+          <span class="item-name">${esc(product?.name)}</span>
           ${product?.foreignName ? `<span class="item-foreign" lang="ja">${esc(product.foreignName)}</span>` : ''}
           <span class="item-meta">${esc(meta.join(' · '))}</span>
         </span>
