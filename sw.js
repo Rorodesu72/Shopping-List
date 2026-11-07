@@ -1,5 +1,5 @@
 // 程式檔案先存在手機，開啟時不重新下載；改版時記得更新 VERSION。
-const VERSION = 'v10';
+const VERSION = 'v11';
 const CACHE = `shopping-list-${VERSION}`;
 const ASSETS = [
   './',

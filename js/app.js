@@ -256,14 +256,13 @@ function renderListBody() {
     if (s.total > 0) parts.push(`約 ${money(s.total)}`);
     return parts.join(' · ');
   };
-  let number = 0;
   const groups = c.categories
     .map((cat) => {
       const rows = visible.filter((i) => getCategory(c, state.products.get(i.productId)?.categoryId).id === cat.id);
       if (!rows.length) return '';
       return `<section class="group">
         <h2 class="group-title">${esc(cat.name)}<span class="group-stats">${esc(stats(rows))}</span></h2>
-        ${rows.map((item) => itemRow(item, ++number)).join('')}
+        ${rows.map((item, index) => itemRow(item, index + 1)).join('')}
       </section>`;
     })
     .join('');
