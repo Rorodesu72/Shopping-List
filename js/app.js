@@ -38,7 +38,7 @@ const SWIPE_PX = 40;
 const country = () => getCountry(state.trip.countryCode);
 // 統計金額用的幣別（使用者在標題或設定切換），另一種幣別當作「≈」參考。
 const displayCode = () => (state.displayCurrency === 'TWD' ? 'TWD' : country().currency);
-const otherCode = () => currencies(country()).map((cur) => cur.code).find((code) => code !== displayCode()) ?? null;
+const currencyLabel = (cur) => `${cur.symbol} ${cur.name || cur.code}`;
 const formatIn = (value, code) => formatMoney(value, currencyOf(country(), code));
 const money = (value) => formatIn(value, displayCode());
 // 把 value 從 fromCode 換成另一種幣別顯示；缺匯率時回傳空字串。
@@ -51,6 +51,7 @@ const alsoIn = (value, fromCode = displayCode()) => {
 const sum = (items, code = displayCode()) => summarize(items, country(), state.trip.rate, code);
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const SNOOZE_DAYS = 7;
+const NEW_TRIP = '__new__';
 const RATE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 function formatDateTime(iso) {
@@ -114,10 +115,15 @@ function render() {
 function renderHeader() {
   const s = sum(state.items);
   const converted = alsoIn(s.total);
-  const other = otherCode();
+  const options = currencies(country());
   $('#top').innerHTML = `
     <div class="top-row">
-      <button type="button" class="trip-name" data-action="tab" data-tab="settings">${esc(state.trip.name)}</button>
+      <label class="trip-select"><span class="sr-only">切換旅程</span>
+        <select id="trip-select">
+          ${state.trips.map((trip) => `<option value="${esc(trip.id)}" ${trip.id === state.trip.id ? 'selected' : ''}>${esc(trip.name)}</option>`).join('')}
+          <option value="${NEW_TRIP}">＋ 新增清單</option>
+        </select>
+      </label>
       <span class="progress">已買 <b>${s.doneCount}</b>/${s.count}</span>
     </div>
     <div class="top-total">
@@ -125,7 +131,11 @@ function renderHeader() {
       <span class="top-amount">${money(s.total)}</span>
       ${converted ? `<span class="top-twd">≈ ${converted}</span>` : ''}
       ${s.unconverted ? `<span class="top-twd">（${s.unconverted} 樣缺匯率未計入）</span>` : ''}
-      ${other ? `<button type="button" class="cur-switch" data-action="toggle-currency" aria-label="統計金額改用 ${esc(currencyOf(country(), other).code)} 顯示">改看 ${esc(currencyOf(country(), other).symbol)}</button>` : ''}
+      ${options.length > 1 ? `<label class="cur-select"><span class="sr-only">統計金額顯示幣別</span>
+        <select id="display-currency">
+          ${options.map((cur) => `<option value="${cur.code === 'TWD' ? 'TWD' : 'local'}" ${cur.code === displayCode() ? 'selected' : ''}>${esc(currencyLabel(cur))}</option>`).join('')}
+        </select>
+      </label>` : ''}
     </div>`;
 }
 
@@ -419,7 +429,7 @@ async function renderSettings() {
           </button>`).join('')}
       </div>
       <div class="btn-row">
-        <button type="button" class="btn" data-action="new-trip">新增旅程</button>
+        <button type="button" class="btn" data-action="new-trip">新增清單</button>
         ${canDelete ? '<button type="button" class="btn" data-action="copy-items">從其他旅程複製</button>' : ''}
         ${canDelete ? '<button type="button" class="btn btn-danger" data-action="delete-trip">刪除這趟</button>' : ''}
       </div>
@@ -992,10 +1002,10 @@ async function maybePromptBackup() {
 
 function openNewTripSheet() {
   const sheet = openSheet(`
-    ${sheetHeader('新增旅程')}
+    ${sheetHeader('新增清單')}
     <form id="trip-form" novalidate>
       <label class="field"><span>名稱</span><input id="t-name" autocomplete="off" placeholder="例如 大阪五日"></label>
-      <p class="field-error" id="trip-error" hidden>請填旅程名稱。</p>
+      <p class="field-error" id="trip-error" hidden>請填清單名稱。</p>
       <div class="field"><span>國家與幣別</span><p class="static">日本（JPY）</p></div>
       <div class="sheet-actions"><button type="submit" class="btn btn-primary">建立</button></div>
     </form>`);
@@ -1008,7 +1018,7 @@ function openNewTripSheet() {
     closeSheet();
     state.tab = 'list';
     await refresh();
-    showToast('已建立旅程');
+    showToast('已建立清單');
   });
 }
 
@@ -1157,10 +1167,6 @@ const actions = {
     await refresh();
     showToast(`${SNOOZE_DAYS} 天內不會再提醒備份，仍可到設定備份`);
   },
-  'toggle-currency': async () => {
-    await setMeta('displayCurrency', displayCode() === 'TWD' ? 'local' : 'TWD');
-    await refresh();
-  },
   import: () => $('#import-input').click(),
   'undo-import': async () => {
     const ok = await confirmDialog({ title: '復原上次匯入？', body: '會回到匯入前的資料，匯入後新增的內容會消失。', ok: '復原', danger: true });
@@ -1203,6 +1209,24 @@ document.addEventListener('contextmenu', (event) => {
 
 $('#view').addEventListener('change', (event) => {
   if (event.target.dataset.setting) saveSetting(event.target);
+});
+
+$('#top').addEventListener('change', async (event) => {
+  const { id, value } = event.target;
+  if (id === 'display-currency') {
+    await setMeta('displayCurrency', value);
+    await refresh();
+  } else if (id === 'trip-select') {
+    if (value === NEW_TRIP) {
+      // 選單先回到目前的旅程，取消新增時才不會停在「新增清單」。
+      event.target.value = state.trip.id;
+      openNewTripSheet();
+      return;
+    }
+    await model.setActiveTrip(value);
+    state.cat = 'all';
+    await refresh();
+  }
 });
 
 $('#import-input').addEventListener('change', (event) => {

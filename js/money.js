@@ -1,7 +1,7 @@
 // 價格相關的純函式。
 // 每個價格都記著自己的幣別（當地幣或台幣），要加總時再用旅程匯率換成同一種幣別。
 
-export const TWD = { code: 'TWD', symbol: 'NT$', decimals: 0 };
+export const TWD = { code: 'TWD', symbol: 'NT$', decimals: 0, name: '台幣' };
 
 // 接受逗號與全形數字（日文輸入法常見），空白回傳 null，不合法回傳 NaN。
 export function parseNumber(value) {
@@ -26,7 +26,7 @@ export function taxIncluded(price, taxMode, taxRate, decimals = 0) {
 
 // 這趟旅程可用的幣別：當地幣在前，台幣在後。
 export function currencies(country) {
-  const local = { code: country.currency, symbol: country.symbol, decimals: country.decimals };
+  const local = { code: country.currency, symbol: country.symbol, decimals: country.decimals, name: country.currencyName };
   return local.code === TWD.code ? [local] : [local, TWD];
 }
 

@@ -4,6 +4,7 @@ export const COUNTRIES = {
     code: 'JP',
     name: '日本',
     currency: 'JPY',
+    currencyName: '日圓',
     symbol: '¥',
     decimals: 0,
     locale: 'ja-JP',
