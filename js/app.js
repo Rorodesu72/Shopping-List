@@ -147,7 +147,8 @@ function installBanner() {
   </button>`;
 }
 
-function itemRow(item) {
+// number 是清單分頁的順序編號，其他分頁不傳就不顯示。
+function itemRow(item, number = null) {
   const product = state.products.get(item.productId);
   const variant = state.variants.get(item.variantId);
   const storeName = state.stores.get(item.storeId)?.name;
@@ -164,7 +165,7 @@ function itemRow(item) {
         : `<button type="button" class="thumb-btn" data-action="edit-item" data-id="${esc(item.id)}" aria-label="編輯：${esc(product?.name)}"><span class="thumb thumb-empty">${PHOTO_ICON}</span></button>`}
       <button type="button" class="item-main" data-action="edit-item" data-id="${esc(item.id)}">
         <span class="item-text">
-          <span class="item-name">${esc(product?.name)}</span>
+          <span class="item-name">${number ? `<span class="item-no" aria-label="第 ${number} 樣">${number}</span>` : ''}${esc(product?.name)}</span>
           ${product?.foreignName ? `<span class="item-foreign" lang="ja">${esc(product.foreignName)}</span>` : ''}
           <span class="item-meta">${esc(meta.join(' · '))}</span>
         </span>
@@ -247,13 +248,25 @@ function renderListBody() {
     body.innerHTML = '<div class="empty-state"><h2>找不到符合的品項</h2><p>試試其他關鍵字，或調整上方的篩選。</p></div>';
     return;
   }
-  body.innerHTML = checkedBar() + c.categories
+  // 統計：件數、已買／未買、預估金額（用目前的顯示幣別）。
+  const stats = (items) => {
+    const s = sum(items);
+    const parts = [`${s.count} 樣`, `已買 ${s.doneCount}`, `未買 ${s.count - s.doneCount}`];
+    if (s.total > 0) parts.push(`約 ${money(s.total)}`);
+    return parts.join(' · ');
+  };
+  let number = 0;
+  const groups = c.categories
     .map((cat) => {
       const rows = visible.filter((i) => getCategory(c, state.products.get(i.productId)?.categoryId).id === cat.id);
       if (!rows.length) return '';
-      return `<section class="group"><h2 class="group-title">${esc(cat.name)}<span>${rows.length}</span></h2>${rows.map(itemRow).join('')}</section>`;
+      return `<section class="group">
+        <h2 class="group-title">${esc(cat.name)}<span class="group-stats">${esc(stats(rows))}</span></h2>
+        ${rows.map((item) => itemRow(item, ++number)).join('')}
+      </section>`;
     })
     .join('');
+  body.innerHTML = `${checkedBar()}<p class="list-stats">${visible.length < state.items.length ? '篩選結果' : '全部'}：${esc(stats(visible))}</p>${groups}`;
 }
 
 // 店家、幫誰買兩個分頁共用：依 keyOf 分組，沒填的那組排最後，可個別收合。
@@ -278,7 +291,7 @@ function renderGrouped({ keyOf, nameOf, closed, empty }) {
           <span class="store-name">${esc(nameOf(key))}</span>
           <span class="store-sub">${left ? `還有 ${left} 樣 · 約 ${money(s.remaining)}` : '都買齊了'}</span>
         </summary>
-        ${items.map(itemRow).join('')}
+        ${items.map((item) => itemRow(item)).join('')}
       </details>`;
     })
     .join('');
