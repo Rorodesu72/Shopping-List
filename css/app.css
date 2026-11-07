@@ -159,12 +159,6 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation;
 }
 .thumb-btn img { display: block; pointer-events: none; -webkit-user-drag: none; }
-.thumb-btn { position: relative; }
-.thumb-count {
-  position: absolute; right: -4px; bottom: -4px; min-width: 20px; height: 20px; padding: 0 5px;
-  display: grid; place-items: center; border-radius: 10px; pointer-events: none;
-  background: #1b2a58; color: #fff; font-size: 12px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
-}
 .item-delete {
   flex: none; width: 44px; display: grid; place-items: center;
   background: none; border: 0; padding: 0; color: var(--danger);

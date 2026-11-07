@@ -136,14 +136,12 @@ function itemRow(item) {
   const meta = [`× ${item.qty}`, variantLabel(variant), storeName, item.forWhom && `幫${item.forWhom}買`].filter(Boolean);
   const photoIds = model.photoIdsOf(item).filter((pid) => state.thumbs.has(pid));
   const thumb = photoIds.length ? state.thumbs.get(photoIds[0]) : null;
-  const countBadge = photoIds.length > 1 ? `<span class="thumb-count" aria-hidden="true">${photoIds.length}</span>` : '';
-  const countLabel = photoIds.length > 1 ? `，共 ${photoIds.length} 張` : '';
   return `
     <article class="item ${item.purchased ? 'done' : ''}">
       <button type="button" class="check" data-action="toggle" data-id="${esc(item.id)}"
         aria-pressed="${item.purchased}" aria-label="${item.purchased ? '改成未買' : '標記已買'}：${esc(product?.name)}">${CHECK_ICON}</button>
       ${thumb
-        ? `<button type="button" class="thumb-btn zoomable" data-action="photo" data-item="${esc(item.id)}" data-index="0" aria-label="看大圖：${esc(product?.name)}${countLabel}"><img class="thumb" src="${thumb}" alt="">${countBadge}</button>`
+        ? `<button type="button" class="thumb-btn zoomable" data-action="photo" data-item="${esc(item.id)}" data-index="0" aria-label="看大圖：${esc(product?.name)}"><img class="thumb" src="${thumb}" alt=""></button>`
         : `<button type="button" class="thumb-btn" data-action="edit-item" data-id="${esc(item.id)}" aria-label="編輯：${esc(product?.name)}"><span class="thumb thumb-empty">${PHOTO_ICON}</span></button>`}
       <button type="button" class="item-main" data-action="edit-item" data-id="${esc(item.id)}">
         <span class="item-text">
