@@ -6,9 +6,16 @@ import { taxIncluded } from './money.js';
 const normalize = (text) => (text || '').trim().toLowerCase();
 const now = () => new Date().toISOString();
 
-export async function markChanged({ photo = false } = {}) {
+export async function markChanged({ photos = 0 } = {}) {
   await setMeta('changesSinceBackup', (await getMeta('changesSinceBackup', 0)) + 1);
-  if (photo) await setMeta('photoChangesSinceFull', (await getMeta('photoChangesSinceFull', 0)) + 1);
+  if (photos) await setMeta('photoChangesSinceFull', (await getMeta('photoChangesSinceFull', 0)) + photos);
+}
+
+// 品項的照片清單。舊版資料（含舊備份）每個品項只有一個 photoId，這裡一併讀出。
+export function photoIdsOf(item) {
+  if (!item) return [];
+  if (Array.isArray(item.photoIds)) return item.photoIds;
+  return item.photoId ? [item.photoId] : [];
 }
 
 // ---- 旅程 ----
@@ -117,7 +124,7 @@ async function findOrCreateStore(name, countryCode) {
 async function deletePhotoIfUnused(photoId, exceptItemId) {
   if (!photoId) return;
   const items = await getAll('items');
-  if (items.some((i) => i.photoId === photoId && i.id !== exceptItemId)) return;
+  if (items.some((i) => i.id !== exceptItemId && photoIdsOf(i).includes(photoId))) return;
   await remove('photos', photoId);
 }
 
@@ -132,7 +139,7 @@ async function syncPriceRecord(item, country) {
     itemId: item.id,
     variantId: item.variantId,
     storeId: item.storeId,
-    photoId: item.photoId,
+    photoIds: item.photoIds,
     price: item.actualPrice,
     taxMode: item.taxMode,
     taxRate: item.taxRate,
@@ -142,20 +149,30 @@ async function syncPriceRecord(item, country) {
   });
 }
 
-export async function saveItem(trip, form, draftPhoto, removePhoto) {
+// photos 是表單上照片的最終順序：{ id } 是已存的照片，{ draft } 是剛加入、還沒存的照片。
+// 不傳 photos 表示照片不變。
+export async function saveItem(trip, form, photos = null) {
   const country = getCountry(trip.countryCode);
   const existing = form.id ? await get('items', form.id) : null;
   const productId = await findOrCreateProduct(form);
   const variantId = await findOrCreateVariant({ ...form, productId });
   const storeId = await findOrCreateStore(form.storeName, trip.countryCode);
 
-  let photoId = existing?.photoId ?? null;
-  const oldPhotoId = photoId;
-  if (draftPhoto) {
-    photoId = newId('photo');
-    await put('photos', { id: photoId, ...draftPhoto, createdAt: now() });
-  } else if (removePhoto) {
-    photoId = null;
+  const oldPhotoIds = photoIdsOf(existing);
+  let photoIds = oldPhotoIds;
+  let addedPhotos = 0;
+  if (photos) {
+    photoIds = [];
+    for (const photo of photos) {
+      if (photo.id) {
+        photoIds.push(photo.id);
+        continue;
+      }
+      const id = newId('photo');
+      await put('photos', { id, full: photo.draft.full, thumb: photo.draft.thumb, createdAt: now() });
+      photoIds.push(id);
+      addedPhotos += 1;
+    }
   }
 
   const purchased = existing?.purchased ?? false;
@@ -165,7 +182,7 @@ export async function saveItem(trip, form, draftPhoto, removePhoto) {
     productId,
     variantId,
     storeId,
-    photoId,
+    photoIds,
     qty: form.qty || 1,
     estPrice: form.estPrice,
     actualPrice: form.actualPrice,
@@ -180,9 +197,11 @@ export async function saveItem(trip, form, draftPhoto, removePhoto) {
     updatedAt: now(),
   };
   await put('items', item);
-  if (oldPhotoId && oldPhotoId !== photoId) await deletePhotoIfUnused(oldPhotoId, item.id);
+  for (const oldId of oldPhotoIds) {
+    if (!photoIds.includes(oldId)) await deletePhotoIfUnused(oldId, item.id);
+  }
   await syncPriceRecord(item, country);
-  await markChanged({ photo: Boolean(draftPhoto) });
+  await markChanged({ photos: addedPhotos });
   return item;
 }
 
@@ -202,7 +221,7 @@ export async function deleteItem(id, { mark = true } = {}) {
   if (!item) return;
   await remove('items', id);
   await remove('priceRecords', `pr_${id}`);
-  await deletePhotoIfUnused(item.photoId, id);
+  for (const photoId of photoIdsOf(item)) await deletePhotoIfUnused(photoId, id);
   if (mark) await markChanged();
 }
 

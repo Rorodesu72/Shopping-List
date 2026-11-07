@@ -31,6 +31,7 @@ const CLOSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12
 const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg>';
 const LONG_PRESS_MS = 450;
 const DECODE_WAIT_MS = 200;
+const SWIPE_PX = 40;
 
 const country = () => getCountry(state.trip.countryCode);
 const money = (value) => formatMoney(value, country());
@@ -133,13 +134,16 @@ function itemRow(item) {
   const storeName = state.stores.get(item.storeId)?.name;
   const unit = itemUnitPrice(item, country());
   const meta = [`× ${item.qty}`, variantLabel(variant), storeName, item.forWhom && `幫${item.forWhom}買`].filter(Boolean);
-  const thumb = state.thumbs.get(item.photoId);
+  const photoIds = model.photoIdsOf(item).filter((pid) => state.thumbs.has(pid));
+  const thumb = photoIds.length ? state.thumbs.get(photoIds[0]) : null;
+  const countBadge = photoIds.length > 1 ? `<span class="thumb-count" aria-hidden="true">${photoIds.length}</span>` : '';
+  const countLabel = photoIds.length > 1 ? `，共 ${photoIds.length} 張` : '';
   return `
     <article class="item ${item.purchased ? 'done' : ''}">
       <button type="button" class="check" data-action="toggle" data-id="${esc(item.id)}"
         aria-pressed="${item.purchased}" aria-label="${item.purchased ? '改成未買' : '標記已買'}：${esc(product?.name)}">${CHECK_ICON}</button>
       ${thumb
-        ? `<button type="button" class="thumb-btn zoomable" data-action="photo" data-photo="${esc(item.photoId)}" aria-label="看大圖：${esc(product?.name)}"><img class="thumb" src="${thumb}" alt=""></button>`
+        ? `<button type="button" class="thumb-btn zoomable" data-action="photo" data-item="${esc(item.id)}" data-index="0" aria-label="看大圖：${esc(product?.name)}${countLabel}"><img class="thumb" src="${thumb}" alt="">${countBadge}</button>`
         : `<button type="button" class="thumb-btn" data-action="edit-item" data-id="${esc(item.id)}" aria-label="編輯：${esc(product?.name)}"><span class="thumb thumb-empty">${PHOTO_ICON}</span></button>`}
       <button type="button" class="item-main" data-action="edit-item" data-id="${esc(item.id)}">
         <span class="item-text">
@@ -451,22 +455,19 @@ async function openItemSheet(id) {
   const taxRate = item?.taxRate ?? category.taxRate;
   const storeNames = new Set([...c.stores, ...[...state.stores.values()].filter((s) => s.countryCode === c.code).map((s) => s.name)]);
   const people = new Set(state.items.map((i) => i.forWhom).filter(Boolean));
-  let draftPhoto = null;
-  let removePhoto = false;
-  let previewUrl = null;
-  const existingThumb = item ? state.thumbs.get(item.photoId) : null;
+  // 表單上的照片，依顯示順序：已存的照片有 id，剛加入的有 draft（壓縮後的大圖與縮圖）。
+  const photos = model.photoIdsOf(item)
+    .filter((pid) => state.thumbs.has(pid))
+    .map((pid) => ({ id: pid, url: state.thumbs.get(pid) }));
+  let photosChanged = false;
 
   const sheet = openSheet(`
     ${sheetHeader(item ? '編輯品項' : '新增品項')}
     <form id="item-form" novalidate>
       <div class="photo-field">
-        <button type="button" id="photo-preview" class="photo-preview zoomable" aria-label="看大圖">${existingThumb ? `<img src="${existingThumb}" alt="商品照片">` : PHOTO_ICON}</button>
-        <div class="photo-actions">
-          <label class="btn" for="f-photo">${existingThumb ? '更換照片' : '加照片'}</label>
-          <input id="f-photo" class="sr-only" type="file" accept="image/*">
-          <button type="button" class="btn btn-quiet" id="remove-photo" ${existingThumb ? '' : 'hidden'}>移除</button>
-          <p class="muted fine" id="photo-status">可拍照或從相簿選，存檔前會先壓縮。</p>
-        </div>
+        <div class="photo-strip" id="photo-strip"></div>
+        <input id="f-photo" class="sr-only" type="file" accept="image/*" multiple>
+        <p class="muted fine" id="photo-status">可拍照或從相簿選，張數不限，存檔前會先壓縮。</p>
       </div>
 
       <label class="field"><span>名稱（必填）</span><input id="f-name" value="${esc(product?.name)}" autocomplete="off" enterkeyhint="next"></label>
@@ -537,36 +538,56 @@ async function openItemSheet(id) {
     updateLivePrice();
   });
 
+  const renderPhotos = () => {
+    $('#photo-strip', sheet).innerHTML = `
+      ${photos.map((p, i) => `<div class="photo-cell">
+        <button type="button" class="photo-preview zoomable" data-view="${i}" aria-label="看大圖：第 ${i + 1} 張"><img src="${p.url}" alt=""></button>
+        <button type="button" class="photo-remove" data-remove="${i}" aria-label="移除第 ${i + 1} 張照片">${CLOSE_ICON}</button>
+      </div>`).join('')}
+      <label class="photo-add" for="f-photo">${PHOTO_ICON}<span>${photos.length ? '再加照片' : '加照片'}</span></label>`;
+  };
+  renderPhotos();
+
   $('#f-photo', sheet).addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
+    const files = [...event.target.files];
+    event.target.value = '';
+    if (!files.length) return;
     const status = $('#photo-status', sheet);
-    status.textContent = '正在壓縮照片…';
-    try {
-      draftPhoto = await compressPhoto(file);
-      removePhoto = false;
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      previewUrl = URL.createObjectURL(draftPhoto.thumb);
-      $('#photo-preview', sheet).innerHTML = `<img src="${previewUrl}" alt="商品照片">`;
-      $('#remove-photo', sheet).hidden = false;
-      status.textContent = `壓縮後約 ${backup.formatBytes(draftPhoto.full.size + draftPhoto.thumb.size)}。`;
-    } catch (error) {
-      status.textContent = error.message;
+    let added = 0;
+    let bytes = 0;
+    let lastError = null;
+    for (const [i, file] of files.entries()) {
+      status.textContent = files.length > 1 ? `正在壓縮照片（${i + 1}/${files.length}）…` : '正在壓縮照片…';
+      try {
+        const draft = await compressPhoto(file);
+        photos.push({ draft, url: URL.createObjectURL(draft.thumb) });
+        photosChanged = true;
+        added += 1;
+        bytes += draft.full.size + draft.thumb.size;
+        renderPhotos();
+      } catch (error) {
+        lastError = error.message;
+      }
     }
+    const parts = [];
+    if (added) parts.push(`已加入 ${added} 張，壓縮後約 ${backup.formatBytes(bytes)}，共 ${photos.length} 張。`);
+    if (lastError) parts.push(added ? `另有 ${files.length - added} 張無法開啟。` : lastError);
+    status.textContent = parts.join('');
   });
 
-  $('#photo-preview', sheet).addEventListener('click', () => {
-    if (draftPhoto) openPhoto({ blob: draftPhoto.full });
-    else if (item?.photoId && !removePhoto) openPhoto({ id: item.photoId });
-  });
-
-  $('#remove-photo', sheet).addEventListener('click', () => {
-    draftPhoto = null;
-    removePhoto = true;
-    $('#f-photo', sheet).value = '';
-    $('#photo-preview', sheet).innerHTML = PHOTO_ICON;
-    $('#remove-photo', sheet).hidden = true;
-    $('#photo-status', sheet).textContent = '儲存後會移除照片。';
+  $('#photo-strip', sheet).addEventListener('click', (event) => {
+    const viewBtn = event.target.closest('[data-view]');
+    if (viewBtn) {
+      openPhoto({ sources: photos.map((p) => p.draft?.full ?? p.id), index: Number(viewBtn.dataset.view) });
+      return;
+    }
+    const removeBtn = event.target.closest('[data-remove]');
+    if (!removeBtn) return;
+    const [removed] = photos.splice(Number(removeBtn.dataset.remove), 1);
+    if (removed?.draft) URL.revokeObjectURL(removed.url);
+    photosChanged = true;
+    renderPhotos();
+    $('#photo-status', sheet).textContent = photos.length ? `儲存後會移除這張照片，剩 ${photos.length} 張。` : '儲存後會移除照片。';
   });
 
   $('#delete-item', sheet)?.addEventListener('click', async () => {
@@ -618,10 +639,9 @@ async function openItemSheet(id) {
           forWhom: $('#f-for', sheet).value,
           note: $('#f-note', sheet).value,
         },
-        draftPhoto,
-        removePhoto,
+        photosChanged ? photos.map((p) => (p.draft ? { draft: p.draft } : { id: p.id })) : null,
       );
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      for (const p of photos) if (p.draft) URL.revokeObjectURL(p.url);
       closeSheet();
       await refresh();
       showToast('已儲存');
@@ -636,40 +656,116 @@ async function openItemSheet(id) {
 
 let openingPhoto = false;
 
+// 盡量等圖片解碼完才顯示，但不讓使用者等太久；圖框大小固定，晚一點出現也不會變形。
+async function decodedImage(url) {
+  const image = new Image();
+  image.className = 'viewer-img';
+  image.alt = '商品照片';
+  image.draggable = false;
+  image.src = url;
+  await Promise.race([image.decode().catch(() => {}), new Promise((resolve) => setTimeout(resolve, DECODE_WAIT_MS))]);
+  return image;
+}
+
+// sources 每一項是照片 id，或表單上還沒存的大圖 Blob；有多張時可左右滑動或按鈕換張。
 // 點一下和長按都會走到這裡，長按放開後的點擊不會再開第二次。
-async function openPhoto({ id, blob }) {
+async function openPhoto({ sources, index = 0 }) {
   const dialog = $('#photo');
-  if (dialog.open || openingPhoto) return;
+  if (dialog.open || openingPhoto || !sources?.length) return;
   openingPhoto = true;
+  const urls = new Map();
+  const revokeAll = () => {
+    for (const url of urls.values()) if (url) URL.revokeObjectURL(url);
+    urls.clear();
+  };
+  const urlAt = async (i) => {
+    if (!urls.has(i)) {
+      const source = sources[i];
+      const full = source instanceof Blob ? source : (await get('photos', source))?.full;
+      urls.set(i, full ? URL.createObjectURL(full) : null);
+    }
+    return urls.get(i);
+  };
+  const multi = sources.length > 1;
+  let current = Math.min(Math.max(0, index), sources.length - 1);
+  let ticket = 0;
+
+  const show = async (i) => {
+    const mine = ++ticket;
+    const url = await urlAt(i);
+    const image = url ? await decodedImage(url) : null;
+    if (mine !== ticket) return false;
+    current = i;
+    const stage = $('.viewer-stage', dialog);
+    if (image) stage.replaceChildren(image);
+    else stage.innerHTML = '<p class="viewer-missing">找不到這張照片的大圖</p>';
+    if (multi) {
+      $('#viewer-count', dialog).textContent = `${i + 1} / ${sources.length}`;
+      $('#viewer-prev', dialog).disabled = i === 0;
+      $('#viewer-next', dialog).disabled = i === sources.length - 1;
+    }
+    return Boolean(image);
+  };
+  const go = (step) => {
+    const next = current + step;
+    if (next >= 0 && next < sources.length) show(next);
+  };
+
   try {
-    const full = blob ?? (await get('photos', id))?.full;
-    if (!full) {
+    dialog.innerHTML = `
+      <div class="viewer-bar">
+        <span class="viewer-count" id="viewer-count" aria-live="polite"></span>
+        <button type="button" class="viewer-close" id="viewer-close">關閉</button>
+      </div>
+      <div class="viewer-stage" tabindex="-1" autofocus></div>
+      ${multi ? `<div class="viewer-nav">
+        <button type="button" class="viewer-step" id="viewer-prev">上一張</button>
+        <button type="button" class="viewer-step" id="viewer-next">下一張</button>
+      </div>` : ''}`;
+    const found = await show(current);
+    if (!found && !multi) {
+      revokeAll();
+      dialog.innerHTML = '';
       showToast('找不到這張照片的大圖');
       return;
     }
-    const url = URL.createObjectURL(full);
-    // 盡量等圖片解碼完才顯示，但不讓使用者等太久；圖框大小固定，晚一點出現也不會變形。
-    const image = new Image();
-    image.className = 'viewer-img';
-    image.alt = '商品照片';
-    image.draggable = false;
-    image.src = url;
-    await Promise.race([image.decode().catch(() => {}), new Promise((resolve) => setTimeout(resolve, DECODE_WAIT_MS))]);
-    dialog.innerHTML = `
-      <button type="button" class="viewer-close" id="viewer-close">關閉</button>
-      <div class="viewer-stage" tabindex="-1" autofocus></div>`;
-    $('.viewer-stage', dialog).append(image);
     dialog.onclose = () => {
       if (dialog.open) return;
-      URL.revokeObjectURL(url);
+      ticket += 1;
+      revokeAll();
       dialog.innerHTML = '';
+      dialog.onkeydown = null;
     };
     dialog.showModal();
     window.getSelection()?.removeAllRanges();
     $('#viewer-close', dialog).onclick = () => dialog.close();
+    if (multi) {
+      $('#viewer-prev', dialog).onclick = () => go(-1);
+      $('#viewer-next', dialog).onclick = () => go(1);
+      dialog.onkeydown = (event) => {
+        if (event.key === 'ArrowLeft') go(-1);
+        if (event.key === 'ArrowRight') go(1);
+      };
+      const stage = $('.viewer-stage', dialog);
+      let startX = null;
+      stage.onpointerdown = (event) => { startX = event.clientX; };
+      stage.onpointercancel = () => { startX = null; };
+      stage.onpointerup = (event) => {
+        if (startX == null) return;
+        const dx = event.clientX - startX;
+        startX = null;
+        if (Math.abs(dx) > SWIPE_PX) go(dx < 0 ? 1 : -1);
+      };
+    }
   } finally {
     openingPhoto = false;
   }
+}
+
+async function openItemPhotos(itemId, index) {
+  const item = await get('items', itemId);
+  const ids = model.photoIdsOf(item).filter((pid) => state.thumbs.has(pid));
+  await openPhoto({ sources: ids, index });
 }
 
 // ---- 給店員看 ----
@@ -679,14 +775,17 @@ async function openClerk(id) {
   if (!item) return;
   const product = state.products.get(item.productId);
   const variant = state.variants.get(item.variantId);
-  const photo = item.photoId ? await get('photos', item.photoId) : null;
-  const url = photo ? URL.createObjectURL(photo.full) : null;
+  const photoIds = model.photoIdsOf(item).filter((pid) => state.thumbs.has(pid));
+  const fulls = await Promise.all(photoIds.map(async (pid) => (await get('photos', pid))?.full));
+  const urls = fulls.map((full) => (full ? URL.createObjectURL(full) : null));
   const dialog = $('#clerk');
   const label = variantLabel(variant);
   const phrases = country().clerkPhrases;
   dialog.innerHTML = `
     <button type="button" class="clerk-close" id="clerk-close">關閉</button>
-    ${url ? `<button type="button" class="clerk-photo-btn zoomable" data-action="photo" data-photo="${esc(item.photoId)}" aria-label="看大圖"><img class="clerk-photo" src="${url}" alt="${esc(product?.name)}"></button>` : ''}
+    ${photoIds.length ? `<div class="clerk-photos ${photoIds.length > 1 ? 'multi' : ''}">
+      ${photoIds.map((pid, i) => `<button type="button" class="clerk-photo-btn zoomable" data-action="photo" data-item="${esc(item.id)}" data-index="${i}" aria-label="看大圖：第 ${i + 1} 張"><img class="clerk-photo" src="${urls[i] ?? state.thumbs.get(pid)}" alt="${esc(product?.name)}"></button>`).join('')}
+    </div>` : ''}
     <div class="clerk-body" lang="ja">
       <p class="clerk-name">${esc(product?.foreignName || product?.name)}</p>
       <p class="clerk-sub">${esc([label, `× ${item.qty}`].filter(Boolean).join('　'))}</p>
@@ -697,7 +796,7 @@ async function openClerk(id) {
   dialog.showModal();
   $('#clerk-close', dialog).onclick = () => {
     dialog.close();
-    if (url) URL.revokeObjectURL(url);
+    for (const url of urls) if (url) URL.revokeObjectURL(url);
     dialog.innerHTML = '';
   };
 }
@@ -925,7 +1024,7 @@ const actions = {
   tab: (el) => { state.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   'add-item': () => openItemSheet(null),
   'edit-item': (el) => openItemSheet(el.dataset.id),
-  photo: (el) => openPhoto({ id: el.dataset.photo }),
+  photo: (el) => openItemPhotos(el.dataset.item, Number(el.dataset.index) || 0),
   'delete-item': async (el) => {
     const name = state.products.get(state.items.find((i) => i.id === el.dataset.id)?.productId)?.name;
     const ok = await confirmDialog({ title: `刪除「${name}」？`, body: '照片和價格紀錄會一起刪除，也不會再算進花費。', ok: '刪除', danger: true });
