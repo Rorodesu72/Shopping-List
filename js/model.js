@@ -1,7 +1,7 @@
 // 資料操作。三層結構：種類（category）→ 商品（product）→ 包裝容量（variant）。
 import { get, getAll, getMeta, newId, put, remove, setMeta } from './db.js';
 import { COUNTRIES, DEFAULT_COUNTRY, getCategory, getCountry } from './countries.js';
-import { taxIncluded } from './money.js';
+import { currencyOf, taxIncluded } from './money.js';
 
 const normalize = (text) => (text || '').trim().toLowerCase();
 const now = () => new Date().toISOString();
@@ -143,8 +143,8 @@ async function syncPriceRecord(item, country) {
     price: item.actualPrice,
     taxMode: item.taxMode,
     taxRate: item.taxRate,
-    priceWithTax: taxIncluded(item.actualPrice, item.taxMode, item.taxRate, country.decimals),
-    currency: country.currency,
+    priceWithTax: taxIncluded(item.actualPrice, item.taxMode, item.taxRate, currencyOf(country, item.actualCurrency).decimals),
+    currency: currencyOf(country, item.actualCurrency).code,
     date: item.purchasedAt || now(),
   });
 }
@@ -185,7 +185,9 @@ export async function saveItem(trip, form, photos = null) {
     photoIds,
     qty: form.qty || 1,
     estPrice: form.estPrice,
+    estCurrency: form.estCurrency || country.currency,
     actualPrice: form.actualPrice,
+    actualCurrency: form.actualCurrency || country.currency,
     taxMode: form.taxMode,
     taxRate: form.taxRate,
     forWhom: (form.forWhom || '').trim(),

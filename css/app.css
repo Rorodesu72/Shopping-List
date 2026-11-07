@@ -96,6 +96,10 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .top-label { flex-basis: 100%; color: var(--top-muted); font-size: 13px; }
 .top-amount { font-size: 30px; font-weight: 800; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .top-twd { color: var(--top-muted); font-size: 15px; font-variant-numeric: tabular-nums; }
+.cur-switch {
+  align-self: center; margin-left: auto; min-height: 36px; padding: 4px 12px;
+  background: transparent; color: inherit; border: 1px solid var(--top-muted); border-radius: 18px; font-size: 14px; font-weight: 700;
+}
 
 /* 主要內容 */
 #view {
@@ -215,7 +219,10 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 
 /* 表單 */
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.field > span, .field > legend { font-size: 14px; font-weight: 600; color: var(--muted); padding: 0; }
+.field > span, .field > legend, .field > label { font-size: 14px; font-weight: 600; color: var(--muted); padding: 0; }
+.money-input { display: flex; gap: 4px; }
+.money-input input { flex: 1; min-width: 0; }
+.field .money-input select { flex: none; width: auto; padding: 8px 4px; }
 .field input, .field select, .field textarea {
   width: 100%; min-height: 44px; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
@@ -265,7 +272,7 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 /* 底部分頁與新增按鈕 */
 #tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--surface); border-top: 1px solid var(--line);
   padding: 4px max(8px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 4px) max(8px, env(safe-area-inset-left, 0px));
 }

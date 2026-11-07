@@ -1,6 +1,6 @@
 import { get, getAll, getMeta, setMeta } from './db.js';
 import { getCategory, getCountry } from './countries.js';
-import { formatMoney, formatTwd, itemUnitPrice, parseNumber, summarize, taxIncluded, toTwd } from './money.js';
+import { convert, currencies, currencyOf, formatMoney, formatTwd, itemUnitPrice, itemUnitPriceIn, parseNumber, summarize, taxIncluded } from './money.js';
 import { compressPhoto } from './images.js';
 import * as model from './model.js';
 import * as backup from './backup.js';
@@ -22,6 +22,8 @@ const state = {
   status: 'all',
   cat: 'all',
   closedStores: new Set(),
+  closedPeople: new Set(),
+  displayCurrency: 'local',
   meta: {},
 };
 
@@ -34,10 +36,22 @@ const DECODE_WAIT_MS = 200;
 const SWIPE_PX = 40;
 
 const country = () => getCountry(state.trip.countryCode);
-const money = (value) => formatMoney(value, country());
-const twd = (value) => formatTwd(toTwd(value, state.trip.rate));
+// 統計金額用的幣別（使用者在標題或設定切換），另一種幣別當作「≈」參考。
+const displayCode = () => (state.displayCurrency === 'TWD' ? 'TWD' : country().currency);
+const otherCode = () => currencies(country()).map((cur) => cur.code).find((code) => code !== displayCode()) ?? null;
+const formatIn = (value, code) => formatMoney(value, currencyOf(country(), code));
+const money = (value) => formatIn(value, displayCode());
+// 把 value 從 fromCode 換成另一種幣別顯示；缺匯率時回傳空字串。
+const alsoIn = (value, fromCode = displayCode()) => {
+  const code = currencies(country()).map((cur) => cur.code).find((c) => c !== fromCode);
+  if (!code || value == null) return '';
+  const converted = convert(value, fromCode, code, country(), state.trip.rate);
+  return Number.isNaN(converted) ? '' : formatIn(converted, code);
+};
+const sum = (items, code = displayCode()) => summarize(items, country(), state.trip.rate, code);
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-const todayKey = () => new Date().toLocaleDateString('sv-SE');
+const SNOOZE_DAYS = 7;
+const RATE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 function formatDateTime(iso) {
   if (!iso) return '尚未備份';
@@ -72,7 +86,9 @@ async function load() {
     photoChanges: await getMeta('photoChangesSinceFull', 0),
     lastBackupAt: await getMeta('lastBackupAt'),
     canUndoImport: Boolean(await getMeta('safetyCopy')),
+    backupSnoozed: Date.now() < Date.parse(await getMeta('backupPromptSnoozedUntil', '') || 0),
   };
+  state.displayCurrency = await getMeta('displayCurrency', 'local');
 }
 
 async function refresh() {
@@ -91,13 +107,14 @@ function render() {
     else button.removeAttribute('aria-current');
   }
   $('#add-button').hidden = state.tab === 'settings' || state.tab === 'spend';
-  const views = { list: renderList, stores: renderStores, spend: renderSpend, settings: renderSettings };
+  const views = { list: renderList, stores: renderStores, people: renderPeople, spend: renderSpend, settings: renderSettings };
   views[state.tab]();
 }
 
 function renderHeader() {
-  const s = summarize(state.items, country());
-  const converted = twd(s.total);
+  const s = sum(state.items);
+  const converted = alsoIn(s.total);
+  const other = otherCode();
   $('#top').innerHTML = `
     <div class="top-row">
       <button type="button" class="trip-name" data-action="tab" data-tab="settings">${esc(state.trip.name)}</button>
@@ -107,6 +124,8 @@ function renderHeader() {
       <span class="top-label">預估總額</span>
       <span class="top-amount">${money(s.total)}</span>
       ${converted ? `<span class="top-twd">≈ ${converted}</span>` : ''}
+      ${s.unconverted ? `<span class="top-twd">（${s.unconverted} 樣缺匯率未計入）</span>` : ''}
+      ${other ? `<button type="button" class="cur-switch" data-action="toggle-currency" aria-label="統計金額改用 ${esc(currencyOf(country(), other).code)} 顯示">改看 ${esc(currencyOf(country(), other).symbol)}</button>` : ''}
     </div>`;
 }
 
@@ -115,7 +134,7 @@ function hasUnsavedBackup() {
 }
 
 function backupBanner() {
-  if (!hasUnsavedBackup() || state.items.length === 0) return '';
+  if (!hasUnsavedBackup() || state.items.length === 0 || state.meta.backupSnoozed) return '';
   return `<button type="button" class="notice" data-action="backup-prompt">
     <span><b>有變更尚未備份</b>${state.meta.lastBackupAt ? `　上次：${esc(formatDateTime(state.meta.lastBackupAt))}` : ''}</span><span class="notice-go">備份</span>
   </button>`;
@@ -150,7 +169,7 @@ function itemRow(item) {
           <span class="item-meta">${esc(meta.join(' · '))}</span>
         </span>
         <span class="price-tag ${unit == null ? 'empty' : ''} ${item.actualPrice != null ? 'actual' : ''}">
-          ${unit == null ? '未填價' : money(unit)}
+          ${unit == null ? '未填價' : formatMoney(unit.value, unit.currency)}
         </span>
       </button>
       ${item.purchased ? `<button type="button" class="item-delete" data-action="delete-item" data-id="${esc(item.id)}" aria-label="刪除：${esc(product?.name)}">${TRASH_ICON}</button>` : ''}
@@ -237,26 +256,26 @@ function renderListBody() {
     .join('');
 }
 
-function renderStores() {
+// 店家、幫誰買兩個分頁共用：依 keyOf 分組，沒填的那組排最後，可個別收合。
+function renderGrouped({ keyOf, nameOf, closed, empty }) {
   if (state.items.length === 0) {
-    $('#view').innerHTML = '<div class="empty-state"><h2>還沒有店家</h2><p>新增品項時填上店家，這裡就會依店家分組。</p></div>';
+    $('#view').innerHTML = empty;
     return;
   }
   const groups = new Map();
   for (const item of state.items) {
-    const key = item.storeId || 'none';
+    const key = keyOf(item) || 'none';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
   const ordered = [...groups.entries()].sort(([a], [b]) => (a === 'none') - (b === 'none'));
   $('#view').innerHTML = checkedBar() + ordered
     .map(([key, items]) => {
-      const s = summarize(items, country());
-      const name = key === 'none' ? '未指定店家' : state.stores.get(key)?.name;
+      const s = sum(items);
       const left = s.count - s.doneCount;
-      return `<details class="store" data-store="${esc(key)}" ${state.closedStores.has(key) ? '' : 'open'}>
+      return `<details class="store" data-group="${esc(key)}" ${closed.has(key) ? '' : 'open'}>
         <summary>
-          <span class="store-name">${esc(name)}</span>
+          <span class="store-name">${esc(nameOf(key))}</span>
           <span class="store-sub">${left ? `還有 ${left} 樣 · 約 ${money(s.remaining)}` : '都買齊了'}</span>
         </summary>
         ${items.map(itemRow).join('')}
@@ -265,10 +284,28 @@ function renderStores() {
     .join('');
   for (const details of document.querySelectorAll('.store')) {
     details.addEventListener('toggle', () => {
-      if (details.open) state.closedStores.delete(details.dataset.store);
-      else state.closedStores.add(details.dataset.store);
+      if (details.open) closed.delete(details.dataset.group);
+      else closed.add(details.dataset.group);
     });
   }
+}
+
+function renderStores() {
+  renderGrouped({
+    keyOf: (item) => item.storeId,
+    nameOf: (key) => (key === 'none' ? '未指定店家' : state.stores.get(key)?.name),
+    closed: state.closedStores,
+    empty: '<div class="empty-state"><h2>還沒有店家</h2><p>新增品項時填上店家，這裡就會依店家分組。</p></div>',
+  });
+}
+
+function renderPeople() {
+  renderGrouped({
+    keyOf: (item) => item.forWhom?.trim(),
+    nameOf: (key) => (key === 'none' ? '自己' : key),
+    closed: state.closedPeople,
+    empty: '<div class="empty-state"><h2>清單還是空的</h2><p>新增品項時填上「幫誰買」，這裡就會依人分組。</p></div>',
+  });
 }
 
 function breakdownRows(entries, total) {
@@ -288,7 +325,8 @@ function groupAmounts(keyOf) {
   const totals = new Map();
   for (const item of state.items) {
     const name = keyOf(item);
-    const amount = (itemUnitPrice(item, country()) ?? 0) * item.qty;
+    const unit = itemUnitPriceIn(item, country(), state.trip.rate, displayCode());
+    const amount = unit == null || Number.isNaN(unit) ? 0 : unit * item.qty;
     totals.set(name, (totals.get(name) || 0) + amount);
   }
   return [...totals.entries()].map(([name, amount]) => ({ name, amount }));
@@ -296,12 +334,13 @@ function groupAmounts(keyOf) {
 
 function renderSpend() {
   const c = country();
-  const s = summarize(state.items, c);
+  const s = sum(state.items);
   const budget = state.trip.budgetTwd;
-  const spentTwd = toTwd(s.spent, state.trip.rate);
-  const totalTwd = toTwd(s.total, state.trip.rate);
+  const inTwd = sum(state.items, 'TWD');
+  const spentTwd = inTwd.spent;
+  const totalTwd = inTwd.total;
   let budgetBlock = '';
-  if (budget && state.trip.rate) {
+  if (budget && !inTwd.unconverted) {
     const spentShare = Math.min(100, Math.round((spentTwd / budget) * 100));
     const plannedShare = Math.min(100 - spentShare, Math.round(((totalTwd - spentTwd) / budget) * 100));
     const over = totalTwd > budget;
@@ -315,14 +354,15 @@ function renderSpend() {
   } else if (budget) {
     budgetBlock = '<section class="panel"><p class="muted">要比較預算，請先到設定填匯率。</p></section>';
   }
-  const stat = (label, value) => `<div class="stat"><span class="stat-label">${label}</span><span class="stat-value">${money(value)}</span>${twd(value) ? `<span class="stat-twd">≈ ${twd(value)}</span>` : ''}</div>`;
+  const stat = (label, value) => `<div class="stat"><span class="stat-label">${label}</span><span class="stat-value">${money(value)}</span>${alsoIn(value) ? `<span class="stat-twd">≈ ${alsoIn(value)}</span>` : ''}</div>`;
   const byCategory = groupAmounts((i) => getCategory(c, state.products.get(i.productId)?.categoryId).name);
   const byStore = groupAmounts((i) => state.stores.get(i.storeId)?.name || '未指定店家');
   const byPerson = groupAmounts((i) => i.forWhom || '自己');
   $('#view').innerHTML = `
     <section class="stats">${stat('已花', s.spent)}${stat('還要花', s.remaining)}</section>
     ${s.unpriced ? `<p class="muted pad">有 ${s.unpriced} 樣還沒填價格，沒有算進金額。</p>` : ''}
-    <p class="muted pad">金額都已換算成含稅價，有實際價時優先用實際價。</p>
+    ${s.unconverted ? `<p class="text-warn pad">有 ${s.unconverted} 樣的幣別需要匯率才能換算，沒有算進金額。請到設定填匯率。</p>` : ''}
+    <p class="muted pad">金額都已換算成含稅價並以 ${esc(currencyOf(c, displayCode()).symbol)} 顯示，有實際價時優先用實際價。</p>
     ${budgetBlock}
     ${state.items.length ? `
       <section class="panel"><h2 class="panel-title">依分類</h2>${breakdownRows(byCategory, s.total)}</section>
@@ -343,10 +383,15 @@ async function renderSettings() {
         <input id="set-rate" data-setting="rate" inputmode="decimal" value="${t.rate ?? ''}" placeholder="例如 0.21" autocomplete="off">
       </label>
       <div class="row-between">
-        <span class="muted">${t.rateUpdatedAt ? `更新於 ${esc(formatDateTime(t.rateUpdatedAt))}` : '未設定時只顯示外幣'}</span>
+        <span class="muted">${t.rateUpdatedAt ? `${t.rateSource === 'manual' ? '手動輸入' : '自動更新'}於 ${esc(formatDateTime(t.rateUpdatedAt))}` : '未設定時無法換算幣別'}</span>
         <button type="button" class="btn btn-small" data-action="update-rate">線上更新</button>
       </div>
-      <p class="muted fine">匯率僅供參考，按下才會連線。資料來源：<a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">Rates By Exchange Rate API</a></p>
+      <p class="muted fine">匯率僅供參考。有網路時每 12 小時自動更新；手動輸入後就不再自動更新，按「線上更新」可恢復。資料來源：<a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">Rates By Exchange Rate API</a></p>
+      ${currencies(c).length > 1 ? `<fieldset class="field seg-field"><legend>統計金額顯示幣別</legend>
+        <div class="seg">
+          ${currencies(c).map((cur) => `<label><input type="radio" name="display-currency" data-setting="displayCurrency" value="${cur.code === 'TWD' ? 'TWD' : 'local'}" ${displayCode() === cur.code ? 'checked' : ''}><span>${esc(cur.symbol)} ${esc(cur.code)}</span></label>`).join('')}
+        </div>
+      </fieldset>` : ''}
       <label class="field"><span>預算（台幣，可不填）</span>
         <input id="set-budget" data-setting="budget" inputmode="numeric" value="${t.budgetTwd ?? ''}" placeholder="例如 20000" autocomplete="off">
       </label>
@@ -443,6 +488,21 @@ function showToast(text, action) {
 
 // ---- 品項表單 ----
 
+// 單價欄位：數字加上幣別選單（當地幣或台幣）。
+function priceField(key, label, value, code) {
+  const c = country();
+  const selected = currencyOf(c, code || c.currency).code;
+  return `<div class="field">
+    <label for="f-${key}">${esc(label)}</label>
+    <div class="money-input">
+      <input id="f-${key}" inputmode="decimal" value="${value ?? ''}" autocomplete="off">
+      <select id="f-${key}-cur" aria-label="${esc(label)}的幣別">
+        ${currencies(c).map((cur) => `<option value="${cur.code}" ${cur.code === selected ? 'selected' : ''}>${esc(cur.symbol)}</option>`).join('')}
+      </select>
+    </div>
+  </div>`;
+}
+
 async function openItemSheet(id) {
   const c = country();
   const item = id ? await get('items', id) : null;
@@ -478,8 +538,8 @@ async function openItemSheet(id) {
       </div>
 
       <div class="field-grid">
-        <label class="field"><span>預估單價（${esc(c.symbol)}）</span><input id="f-est" inputmode="decimal" value="${item?.estPrice ?? ''}" autocomplete="off"></label>
-        <label class="field"><span>實際單價（${esc(c.symbol)}）</span><input id="f-actual" inputmode="decimal" value="${item?.actualPrice ?? ''}" autocomplete="off"></label>
+        ${priceField('est', '預估單價', item?.estPrice, item?.estCurrency)}
+        ${priceField('actual', '實際單價', item?.actualPrice, item?.actualCurrency)}
       </div>
       <p class="field-error" id="price-error" hidden>金額和數量請填數字。</p>
 
@@ -519,15 +579,17 @@ async function openItemSheet(id) {
     const rate = Number($('#f-rate', sheet).value);
     const actual = parseNumber($('#f-actual', sheet).value);
     const est = parseNumber($('#f-est', sheet).value);
-    const price = actual ?? est;
+    const useActual = actual != null;
+    const price = useActual ? actual : est;
     const live = $('#live-price', sheet);
     if (price == null || Number.isNaN(price)) {
       live.textContent = '';
       return;
     }
-    const withTax = taxIncluded(price, mode, rate, c.decimals);
-    const converted = twd(withTax);
-    live.textContent = `含稅 ${money(withTax)}${converted ? ` ≈ ${converted}` : ''}`;
+    const currency = currencyOf(c, $(useActual ? '#f-actual-cur' : '#f-est-cur', sheet).value);
+    const withTax = taxIncluded(price, mode, rate, currency.decimals);
+    const converted = alsoIn(withTax, currency.code);
+    live.textContent = `含稅 ${formatMoney(withTax, currency)}${converted ? ` ≈ ${converted}` : ''}`;
   };
   updateLivePrice();
   $('#item-form', sheet).addEventListener('input', updateLivePrice);
@@ -628,6 +690,8 @@ async function openItemSheet(id) {
           qty: Math.max(1, Math.round(numbers.qty || 1)),
           estPrice: numbers.estPrice,
           actualPrice: numbers.actualPrice,
+          estCurrency: $('#f-est-cur', sheet).value,
+          actualCurrency: $('#f-actual-cur', sheet).value,
           amount: numbers.amount,
           unit: $('#f-unit', sheet).value,
           packCount: Math.max(1, Math.round(numbers.packCount || 1)),
@@ -818,7 +882,8 @@ async function openBackupPrompt() {
     <div class="stack">
       <button type="button" class="btn btn-primary" data-action="prepare-backup" data-photos="1">立即備份</button>
       <button type="button" class="btn" data-action="prepare-backup" data-photos="0">只備份文字</button>
-      <button type="button" class="btn btn-quiet" data-action="snooze-backup">稍後再說</button>
+      <button type="button" class="btn" data-action="snooze-backup">${SNOOZE_DAYS} 天內不再提醒</button>
+      <button type="button" class="btn btn-quiet" data-action="close-sheet">下次再提醒</button>
     </div>`);
 }
 
@@ -906,7 +971,7 @@ async function handleImportFile(file) {
 async function maybePromptBackup() {
   if (!hasUnsavedBackup() || state.items.length === 0) return;
   if ($('#sheet').open || $('#confirm').open || $('#clerk').open) return;
-  if ((await getMeta('backupPromptDismissedOn')) === todayKey()) return;
+  if (state.meta.backupSnoozed) return;
   await openBackupPrompt();
 }
 
@@ -970,15 +1035,19 @@ function openInstallHelp() {
     <p class="muted">之後都從主畫面的圖示開啟。瀏覽器和主畫面 App 的資料可能是分開的；如果已經在瀏覽器裡輸入資料，請先備份，再到主畫面 App 匯入。</p>`);
 }
 
+async function fetchRate() {
+  const response = await fetch(`https://open.er-api.com/v6/latest/${country().rateCode}`, { cache: 'no-store' });
+  const data = await response.json();
+  const rate = data?.rates?.TWD;
+  if (!response.ok || !rate) throw new Error('no rate');
+  return Number(rate.toFixed(4));
+}
+
 async function updateRateOnline() {
-  const c = country();
   showToast('正在取得匯率…');
   try {
-    const response = await fetch(`https://open.er-api.com/v6/latest/${c.rateCode}`, { cache: 'no-store' });
-    const data = await response.json();
-    const rate = data?.rates?.TWD;
-    if (!response.ok || !rate) throw new Error('no rate');
-    await model.updateTrip({ ...state.trip, rate: Number(rate.toFixed(4)), rateUpdatedAt: new Date().toISOString() });
+    const rate = await fetchRate();
+    await model.updateTrip({ ...state.trip, rate, rateSource: 'auto', rateUpdatedAt: new Date().toISOString() });
     await refresh();
     showToast('匯率已更新');
   } catch {
@@ -986,9 +1055,29 @@ async function updateRateOnline() {
   }
 }
 
+// 開啟時在背景更新匯率：手動輸入過、離線、或 12 小時內更新過就不連線，失敗也不打擾使用者。
+async function autoUpdateRate() {
+  const trip = state.trip;
+  if (!navigator.onLine || trip.rateSource === 'manual' || country().currency === 'TWD') return;
+  if (trip.rate && trip.rateUpdatedAt && Date.now() - Date.parse(trip.rateUpdatedAt) < RATE_MAX_AGE_MS) return;
+  try {
+    const rate = await fetchRate();
+    if (state.trip.id !== trip.id) return;
+    await model.updateTrip({ ...state.trip, rate, rateSource: 'auto', rateUpdatedAt: new Date().toISOString() });
+    await refresh();
+  } catch {
+    // 下次開啟再試。
+  }
+}
+
 async function saveSetting(input) {
   const trip = { ...state.trip };
   const key = input.dataset.setting;
+  if (key === 'displayCurrency') {
+    await setMeta('displayCurrency', input.value);
+    await refresh();
+    return;
+  }
   if (key === 'name') {
     const name = input.value.trim();
     if (!name) {
@@ -1006,6 +1095,7 @@ async function saveSetting(input) {
     }
     if (key === 'rate') {
       trip.rate = value;
+      trip.rateSource = value == null ? 'auto' : 'manual';
       trip.rateUpdatedAt = value == null ? null : new Date().toISOString();
     } else {
       trip.budgetTwd = value;
@@ -1048,7 +1138,16 @@ const actions = {
   'clear-samples': async () => { await model.clearSampleItems(); await refresh(); showToast('已清除範例'); },
   'backup-prompt': () => openBackupPrompt(),
   'prepare-backup': (el) => prepareBackup(el.dataset.photos === '1'),
-  'snooze-backup': async () => { await setMeta('backupPromptDismissedOn', todayKey()); closeSheet(); },
+  'snooze-backup': async () => {
+    await setMeta('backupPromptSnoozedUntil', new Date(Date.now() + SNOOZE_DAYS * 24 * 60 * 60 * 1000).toISOString());
+    closeSheet();
+    await refresh();
+    showToast(`${SNOOZE_DAYS} 天內不會再提醒備份，仍可到設定備份`);
+  },
+  'toggle-currency': async () => {
+    await setMeta('displayCurrency', displayCode() === 'TWD' ? 'local' : 'TWD');
+    await refresh();
+  },
   import: () => $('#import-input').click(),
   'undo-import': async () => {
     const ok = await confirmDialog({ title: '復原上次匯入？', body: '會回到匯入前的資料，匯入後新增的內容會消失。', ok: '復原', danger: true });
@@ -1125,6 +1224,7 @@ async function start() {
   await refresh();
   navigator.storage?.persist?.().catch(() => {});
   watchForUpdates();
+  autoUpdateRate();
   await maybePromptBackup();
 }
 
