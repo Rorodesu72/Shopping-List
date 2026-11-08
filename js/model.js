@@ -99,7 +99,7 @@ async function findOrCreateVariant({ productId, amount, unit, packCount }) {
   const variants = await getAll('variants');
   const pack = packCount || 1;
   const size = amount ?? null;
-  const unitName = size == null ? '' : unit || '';
+  const unitName = unit || '';
   const found = variants.find(
     (v) => v.productId === productId && (v.amount ?? null) === size && (v.unit || '') === unitName && (v.packCount || 1) === pack,
   );

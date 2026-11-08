@@ -582,7 +582,7 @@ async function openItemSheet(id) {
 
       <div class="field-grid three">
         <label class="field"><span>容量</span><input id="f-amount" inputmode="decimal" value="${variant?.amount ?? ''}" autocomplete="off"></label>
-        <label class="field"><span>單位</span><select id="f-unit">${c.units.map((u) => `<option ${variant?.unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select></label>
+        <label class="field"><span>單位</span><select id="f-unit"><option value="" ${variant?.unit ? '' : 'selected'}></option>${c.units.map((u) => `<option value="${esc(u)}" ${variant?.unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select></label>
         <label class="field"><span>入數</span><input id="f-pack" inputmode="numeric" value="${variant?.packCount ?? 1}" autocomplete="off"></label>
       </div>
 
