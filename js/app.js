@@ -14,6 +14,7 @@ const state = {
   trip: null,
   trips: [],
   items: [],
+  tasks: [],
   products: new Map(),
   variants: new Map(),
   stores: new Map(),
@@ -70,11 +71,12 @@ function variantLabel(variant) {
 
 async function load() {
   state.trip = await model.ensureInitialData();
-  const [trips, items, products, variants, stores, photos] = await Promise.all(
-    ['trips', 'items', 'products', 'variants', 'stores', 'photos'].map(getAll),
+  const [trips, items, products, variants, stores, photos, tasks] = await Promise.all(
+    ['trips', 'items', 'products', 'variants', 'stores', 'photos', 'tasks'].map(getAll),
   );
   state.trips = trips.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.items = items.filter((i) => i.tripId === state.trip.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  state.tasks = tasks.filter((t) => t.tripId === state.trip.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.products = new Map(products.map((p) => [p.id, p]));
   state.variants = new Map(variants.map((v) => [v.id, v]));
   state.stores = new Map(stores.map((s) => [s.id, s]));
@@ -107,8 +109,8 @@ function render() {
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
-  $('#add-button').hidden = state.tab === 'settings' || state.tab === 'spend';
-  const views = { list: renderList, stores: renderStores, people: renderPeople, spend: renderSpend, settings: renderSettings };
+  $('#add-button').hidden = ['settings', 'spend', 'prep'].includes(state.tab);
+  const views = { list: renderList, stores: renderStores, people: renderPeople, spend: renderSpend, prep: renderPrep, settings: renderSettings };
   views[state.tab]();
 }
 
@@ -391,6 +393,96 @@ function renderSpend() {
       <section class="panel"><h2 class="panel-title">依分類</h2>${breakdownRows(byCategory, s.total)}</section>
       <section class="panel"><h2 class="panel-title">依店家</h2>${breakdownRows(byStore, s.total)}</section>
       <section class="panel"><h2 class="panel-title">幫誰買</h2>${breakdownRows(byPerson, s.total)}</section>` : ''}`;
+}
+
+// ---- 行程準備 ----
+
+function taskRow(task) {
+  return `
+    <article class="item task ${task.done ? 'done' : ''}">
+      <button type="button" class="check" data-action="toggle-task" data-id="${esc(task.id)}"
+        aria-pressed="${task.done}" aria-label="${task.done ? '改成未辦' : '標記已辦'}：${esc(task.title)}">${CHECK_ICON}</button>
+      <button type="button" class="item-main" data-action="edit-task" data-id="${esc(task.id)}">
+        <span class="item-text">
+          <span class="item-name">${esc(task.title)}</span>
+          ${task.note ? `<span class="item-meta">${esc(task.note)}</span>` : ''}
+        </span>
+      </button>
+    </article>`;
+}
+
+function renderPrep() {
+  const tasks = state.tasks;
+  const done = tasks.filter((t) => t.done);
+  const todo = tasks.filter((t) => !t.done);
+  const share = tasks.length ? Math.round((done.length / tasks.length) * 100) : 0;
+  const hasDefaults = (country().prepTasks || []).length > 0;
+  $('#view').innerHTML = `
+    ${tasks.length ? `<section class="panel">
+      <h2 class="panel-title">已辦 ${done.length}/${tasks.length}</h2>
+      <div class="bar" role="img" aria-label="完成 ${share}%"><span style="width:${share}%"></span></div>
+      <p class="muted">${todo.length ? `還有 ${todo.length} 項要辦` : '都辦好了，出發吧！'}</p>
+    </section>` : ''}
+    <form id="task-form" class="task-add" novalidate>
+      <label class="search"><span class="sr-only">新增準備事項</span>
+        <input id="task-input" placeholder="新增準備事項，例如 預約機場接送" autocomplete="off" enterkeyhint="done">
+      </label>
+      <button type="submit" class="btn btn-primary">新增</button>
+    </form>
+    ${tasks.length === 0 ? `<div class="empty-state">
+      <h2>還沒有準備事項</h2>
+      <p>把出發前要辦的事記下來，辦好就打勾。</p>
+      ${hasDefaults ? '<button type="button" class="btn" data-action="add-default-tasks">加入常用準備事項</button>' : ''}
+    </div>` : `
+      ${todo.length ? `<section class="group"><h2 class="group-title">待辦<span class="group-stats">${todo.length} 項</span></h2>${todo.map(taskRow).join('')}</section>` : ''}
+      ${done.length ? `<section class="group"><h2 class="group-title">已辦<span class="group-stats">${done.length} 項</span></h2>${done.map(taskRow).join('')}</section>` : ''}
+      ${hasDefaults ? '<div class="btn-row"><button type="button" class="btn btn-quiet" data-action="add-default-tasks">補上常用準備事項</button></div>' : ''}`}`;
+  $('#task-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const input = $('#task-input');
+    const title = input.value.trim();
+    if (!title) {
+      input.focus();
+      return;
+    }
+    await model.addTask(state.trip.id, title);
+    await refresh();
+    $('#task-input')?.focus();
+  });
+}
+
+async function openTaskSheet(id) {
+  const task = await get('tasks', id);
+  if (!task) return;
+  const sheet = openSheet(`
+    ${sheetHeader('編輯準備事項')}
+    <form id="task-edit" novalidate>
+      <label class="field"><span>事項（必填）</span><input id="te-title" value="${esc(task.title)}" autocomplete="off"></label>
+      <p class="field-error" id="te-error" hidden>請填事項名稱。</p>
+      <label class="field"><span>備註</span><textarea id="te-note" rows="3" placeholder="例如 訂位代號、截止日期">${esc(task.note)}</textarea></label>
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-danger" id="te-delete">刪除</button>
+        <button type="submit" class="btn btn-primary">儲存</button>
+      </div>
+    </form>`);
+  $('#te-delete', sheet).addEventListener('click', async () => {
+    const ok = await confirmDialog({ title: '刪除這個事項？', body: `「${task.title}」會從準備清單刪除。`, ok: '刪除', danger: true });
+    if (!ok) return;
+    await model.deleteTask(task.id);
+    closeSheet();
+    await refresh();
+    showToast('已刪除');
+  });
+  $('#task-edit', sheet).addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = $('#te-title', sheet).value.trim();
+    $('#te-error', sheet).hidden = Boolean(title);
+    if (!title) return;
+    await model.updateTask(task.id, { title, note: $('#te-note', sheet).value });
+    closeSheet();
+    await refresh();
+    showToast('已儲存');
+  });
 }
 
 async function renderSettings() {
@@ -1174,6 +1266,13 @@ const actions = {
     if (await backup.undoImport()) { await refresh(); showToast('已復原'); }
   },
   'switch-trip': async (el) => { await model.setActiveTrip(el.dataset.id); state.cat = 'all'; await refresh(); },
+  'toggle-task': async (el) => { await model.toggleTask(el.dataset.id); await refresh(); },
+  'edit-task': (el) => openTaskSheet(el.dataset.id),
+  'add-default-tasks': async () => {
+    const count = await model.addDefaultTasks(state.trip);
+    await refresh();
+    showToast(count ? `已加入 ${count} 項` : '常用事項都已經在清單裡了');
+  },
   'new-trip': () => openNewTripSheet(),
   'copy-items': () => openCopySheet(),
   'delete-trip': async () => {

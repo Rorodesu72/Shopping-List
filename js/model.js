@@ -54,6 +54,7 @@ export async function setActiveTrip(id) {
 export async function deleteTrip(id) {
   const items = (await getAll('items')).filter((i) => i.tripId === id);
   for (const item of items) await deleteItem(item.id, { mark: false });
+  for (const task of (await getAll('tasks')).filter((t) => t.tripId === id)) await remove('tasks', task.id);
   await remove('trips', id);
   const rest = await getAll('trips');
   await setMeta('activeTripId', rest[0]?.id ?? null);
@@ -225,6 +226,48 @@ export async function deleteItem(id, { mark = true } = {}) {
   await remove('priceRecords', `pr_${id}`);
   for (const photoId of photoIdsOf(item)) await deletePhotoIfUnused(photoId, id);
   if (mark) await markChanged();
+}
+
+// ---- 行程準備 ----
+
+export async function addTask(tripId, title, note = '') {
+  const task = { id: newId('task'), tripId, title: title.trim(), note: note.trim(), done: false, doneAt: null, createdAt: now(), updatedAt: now() };
+  await put('tasks', task);
+  await markChanged();
+  return task;
+}
+
+export async function updateTask(id, { title, note }) {
+  const task = await get('tasks', id);
+  if (!task) return;
+  await put('tasks', { ...task, title: title.trim(), note: (note || '').trim(), updatedAt: now() });
+  await markChanged();
+}
+
+export async function toggleTask(id) {
+  const task = await get('tasks', id);
+  if (!task) return;
+  const done = !task.done;
+  await put('tasks', { ...task, done, doneAt: done ? now() : null, updatedAt: now() });
+  await markChanged();
+}
+
+export async function deleteTask(id) {
+  await remove('tasks', id);
+  await markChanged();
+}
+
+// 加入國家設定裡的常用事項，已經有同名的就略過。回傳加入幾項。
+export async function addDefaultTasks(trip) {
+  const existing = new Set((await getAll('tasks')).filter((t) => t.tripId === trip.id).map((t) => normalize(t.title)));
+  const titles = (getCountry(trip.countryCode).prepTasks || []).filter((title) => !existing.has(normalize(title)));
+  for (const [index, title] of titles.entries()) {
+    // createdAt 錯開，排序才會跟清單順序一致。
+    const stamp = new Date(Date.now() + index).toISOString();
+    await put('tasks', { id: newId('task'), tripId: trip.id, title, note: '', done: false, doneAt: null, createdAt: stamp, updatedAt: stamp });
+  }
+  if (titles.length) await markChanged();
+  return titles.length;
 }
 
 // ---- 範例資料 ----

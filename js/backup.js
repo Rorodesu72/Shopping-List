@@ -1,5 +1,5 @@
 // 備份與還原。檔案是單一 JSON，照片以 base64 內嵌。
-import { DATA_STORES, PHOTO_STORE, getAll, getMeta, replaceAll, setMeta } from './db.js';
+import { DATA_STORES, OPTIONAL_STORES, PHOTO_STORE, getAll, getMeta, replaceAll, setMeta } from './db.js';
 
 const APP_ID = 'travel-shopping-list';
 const FORMAT_VERSION = 1;
@@ -96,6 +96,7 @@ export function parseBackup(text) {
   if (backup?.app !== APP_ID) throw new Error('這不是購物清單的備份檔，請重新選擇。');
   if (backup.formatVersion > FORMAT_VERSION) throw new Error('這份備份來自較新的版本，請先更新 App 再匯入。');
   for (const name of DATA_STORES) {
+    if (OPTIONAL_STORES.includes(name) && backup.data && backup.data[name] === undefined) backup.data[name] = [];
     if (!Array.isArray(backup.data?.[name]) || backup.data[name].some((row) => !row?.id)) {
       throw new Error('備份內容不完整，無法匯入。請改選另一份備份。');
     }
