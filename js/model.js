@@ -11,6 +11,34 @@ export async function markChanged({ photos = 0 } = {}) {
   if (photos) await setMeta('photoChangesSinceFull', (await getMeta('photoChangesSinceFull', 0)) + photos);
 }
 
+// 幫誰買：[{ name, qty }]。舊版資料只有一個 forWhom，代表整個數量都是幫那個人買。
+export function buyersOf(item) {
+  if (!item) return [];
+  if (Array.isArray(item.buyers)) return item.buyers;
+  return item.forWhom?.trim() ? [{ name: item.forWhom.trim(), qty: item.qty || 1 }] : [];
+}
+
+// 依人拆分數量；沒有分配到的部分算自己（name 為空字串）。
+export function allocationsOf(item) {
+  const buyers = buyersOf(item);
+  const rest = (item.qty || 1) - buyers.reduce((total, b) => total + b.qty, 0);
+  return rest > 0 ? [...buyers, { name: '', qty: rest }] : buyers;
+}
+
+// 去掉沒填名字的列，數量至少 1 個，同名的合併。
+export function normalizeBuyers(rows) {
+  const merged = new Map();
+  for (const row of rows || []) {
+    const name = (row.name || '').trim();
+    if (!name) continue;
+    const qty = Math.max(1, Math.round(Number(row.qty) || 1));
+    const key = normalize(name);
+    const found = merged.get(key);
+    merged.set(key, { name: found?.name ?? name, qty: (found?.qty ?? 0) + qty });
+  }
+  return [...merged.values()];
+}
+
 // 品項的照片清單。舊版資料（含舊備份）每個品項只有一個 photoId，這裡一併讀出。
 export function photoIdsOf(item) {
   if (!item) return [];
@@ -177,6 +205,8 @@ export async function saveItem(trip, form, photos = null) {
   }
 
   const purchased = existing?.purchased ?? false;
+  const buyers = normalizeBuyers(form.buyers ?? buyersOf(existing));
+  const assigned = buyers.reduce((total, b) => total + b.qty, 0);
   const item = {
     id: existing?.id ?? newId('item'),
     tripId: trip.id,
@@ -184,14 +214,15 @@ export async function saveItem(trip, form, photos = null) {
     variantId,
     storeId,
     photoIds,
-    qty: form.qty || 1,
+    // 數量至少要涵蓋幫別人買的總數。
+    qty: Math.max(form.qty || 1, assigned),
     estPrice: form.estPrice,
     estCurrency: form.estCurrency || country.currency,
     actualPrice: form.actualPrice,
     actualCurrency: form.actualCurrency || country.currency,
     taxMode: form.taxMode,
     taxRate: form.taxRate,
-    forWhom: (form.forWhom || '').trim(),
+    buyers,
     note: (form.note || '').trim(),
     purchased,
     purchasedAt: existing?.purchasedAt ?? null,
@@ -275,7 +306,7 @@ export async function addDefaultTasks(trip) {
 export async function addSampleItems(trip) {
   const country = getCountry(trip.countryCode);
   const samples = [
-    { name: '合利他命 EX Plus（範例）', foreignName: 'アリナミンEXプラス', categoryId: 'health', amount: 270, unit: '錠', qty: 2, estPrice: 5980, storeName: '松本清', forWhom: '媽媽' },
+    { name: '合利他命 EX Plus（範例）', foreignName: 'アリナミンEXプラス', categoryId: 'health', amount: 270, unit: '錠', qty: 2, estPrice: 5980, storeName: '松本清', buyers: [{ name: '媽媽', qty: 1 }] },
     { name: '眼藥水（範例）', foreignName: 'サンテFX', categoryId: 'drug', amount: 12, unit: 'ml', qty: 3, estPrice: 450, storeName: '唐吉訶德' },
     { name: '東京芭娜娜（範例）', foreignName: '東京ばな奈', categoryId: 'gift', amount: 8, unit: '個', qty: 1, estPrice: 1080, storeName: '機場免稅店', note: '回國當天再買' },
   ];

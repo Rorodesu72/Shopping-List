@@ -165,7 +165,7 @@ function itemRow(item, number = null) {
   const variant = state.variants.get(item.variantId);
   const storeName = state.stores.get(item.storeId)?.name;
   const unit = itemUnitPrice(item, country());
-  const meta = [`× ${item.qty}`, variantLabel(variant), storeName, item.forWhom && `幫${item.forWhom}買`].filter(Boolean);
+  const meta = [`× ${item.qty}`, variantLabel(variant), storeName, buyersLabel(item)].filter(Boolean);
   const photoIds = model.photoIdsOf(item).filter((pid) => state.thumbs.has(pid));
   const thumb = photoIds.length ? state.thumbs.get(photoIds[0]) : null;
   return `
@@ -254,7 +254,7 @@ function renderListBody() {
     if (state.status === 'done' && !item.purchased) return false;
     if (state.cat !== 'all' && product?.categoryId !== state.cat) return false;
     if (!q) return true;
-    const text = [product?.name, product?.foreignName, state.stores.get(item.storeId)?.name, item.forWhom, item.note].join(' ').toLowerCase();
+    const text = [product?.name, product?.foreignName, state.stores.get(item.storeId)?.name, ...model.buyersOf(item).map((b) => b.name), item.note].join(' ').toLowerCase();
     return text.includes(q);
   });
   if (visible.length === 0) {
@@ -281,17 +281,28 @@ function renderListBody() {
   body.innerHTML = `${checkedBar()}<p class="list-stats">${visible.length < state.items.length ? '篩選結果' : '全部'}：${esc(stats(visible))}</p>${groups}`;
 }
 
-// 店家、幫誰買兩個分頁共用：依 keyOf 分組，沒填的那組排最後，可個別收合。
-function renderGrouped({ keyOf, nameOf, closed, empty }) {
+// 例如「幫媽媽 2、爸爸 1 買」；只幫一個人買全部時寫成「幫媽媽買」。
+function buyersLabel(item) {
+  const buyers = model.buyersOf(item);
+  if (!buyers.length) return '';
+  if (buyers.length === 1 && buyers[0].qty >= (item.totalQty ?? item.qty)) return `幫${buyers[0].name}買`;
+  return `幫${buyers.map((b) => `${b.name} ${b.qty}`).join('、')} 買`;
+}
+
+// 店家、幫誰買兩個分頁共用：splitOf 回傳 [分組鍵, 品項] 的清單，一個品項可以分到好幾組
+// （幫誰買時每組的品項數量是那個人的個數）。沒填的那組排最後，可個別收合。
+function renderGrouped({ splitOf, nameOf, closed, empty }) {
   if (state.items.length === 0) {
     $('#view').innerHTML = empty;
     return;
   }
   const groups = new Map();
   for (const item of state.items) {
-    const key = keyOf(item) || 'none';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(item);
+    for (const [rawKey, part] of splitOf(item)) {
+      const key = rawKey || 'none';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(part);
+    }
   }
   const ordered = [...groups.entries()].sort(([a], [b]) => (a === 'none') - (b === 'none'));
   $('#view').innerHTML = checkedBar() + ordered
@@ -317,7 +328,7 @@ function renderGrouped({ keyOf, nameOf, closed, empty }) {
 
 function renderStores() {
   renderGrouped({
-    keyOf: (item) => item.storeId,
+    splitOf: (item) => [[item.storeId, item]],
     nameOf: (key) => (key === 'none' ? '未指定店家' : state.stores.get(key)?.name),
     closed: state.closedStores,
     empty: '<div class="empty-state"><h2>還沒有店家</h2><p>新增品項時填上店家，這裡就會依店家分組。</p></div>',
@@ -326,7 +337,7 @@ function renderStores() {
 
 function renderPeople() {
   renderGrouped({
-    keyOf: (item) => item.forWhom?.trim(),
+    splitOf: (item) => model.allocationsOf(item).map((a) => [a.name, { ...item, qty: a.qty, totalQty: item.qty }]),
     nameOf: (key) => (key === 'none' ? '自己' : key),
     closed: state.closedPeople,
     empty: '<div class="empty-state"><h2>清單還是空的</h2><p>新增品項時填上「幫誰買」，這裡就會依人分組。</p></div>',
@@ -346,13 +357,17 @@ function breakdownRows(entries, total) {
     .join('');
 }
 
+// keyOf 回傳分組名稱，或 [名稱, 個數] 的清單（一個品項分給好幾個人時）。
 function groupAmounts(keyOf) {
   const totals = new Map();
   for (const item of state.items) {
-    const name = keyOf(item);
+    const key = keyOf(item);
+    const parts = Array.isArray(key) ? key : [[key, item.qty]];
     const unit = itemUnitPriceIn(item, country(), state.trip.rate, displayCode());
-    const amount = unit == null || Number.isNaN(unit) ? 0 : unit * item.qty;
-    totals.set(name, (totals.get(name) || 0) + amount);
+    for (const [name, qty] of parts) {
+      const amount = unit == null || Number.isNaN(unit) ? 0 : unit * qty;
+      totals.set(name, (totals.get(name) || 0) + amount);
+    }
   }
   return [...totals.entries()].map(([name, amount]) => ({ name, amount }));
 }
@@ -382,7 +397,7 @@ function renderSpend() {
   const stat = (label, value) => `<div class="stat"><span class="stat-label">${label}</span><span class="stat-value">${money(value)}</span>${alsoIn(value) ? `<span class="stat-twd">≈ ${alsoIn(value)}</span>` : ''}</div>`;
   const byCategory = groupAmounts((i) => getCategory(c, state.products.get(i.productId)?.categoryId).name);
   const byStore = groupAmounts((i) => state.stores.get(i.storeId)?.name || '未指定店家');
-  const byPerson = groupAmounts((i) => i.forWhom || '自己');
+  const byPerson = groupAmounts((i) => model.allocationsOf(i).map((a) => [a.name || '自己', a.qty]));
   $('#view').innerHTML = `
     <section class="stats">${stat('已花', s.spent)}${stat('還要花', s.remaining)}</section>
     ${s.unpriced ? `<p class="muted pad">有 ${s.unpriced} 樣還沒填價格，沒有算進金額。</p>` : ''}
@@ -627,7 +642,7 @@ async function openItemSheet(id) {
   const taxMode = item?.taxMode ?? c.defaultTaxMode;
   const taxRate = item?.taxRate ?? category.taxRate;
   const storeNames = new Set([...c.stores, ...[...state.stores.values()].filter((s) => s.countryCode === c.code).map((s) => s.name)]);
-  const people = new Set(state.items.map((i) => i.forWhom).filter(Boolean));
+  const people = new Set(state.items.flatMap((i) => model.buyersOf(i).map((b) => b.name)));
   // 表單上的照片，依顯示順序：已存的照片有 id，剛加入的有 draft（壓縮後的大圖與縮圖）。
   const photos = model.photoIdsOf(item)
     .filter((pid) => state.thumbs.has(pid))
@@ -678,7 +693,12 @@ async function openItemSheet(id) {
         <label class="field"><span>入數</span><input id="f-pack" inputmode="numeric" value="${variant?.packCount ?? 1}" autocomplete="off"></label>
       </div>
 
-      <label class="field"><span>幫誰買</span><input id="f-for" list="people-options" value="${esc(item?.forWhom)}" autocomplete="off"></label>
+      <fieldset class="field buyers-field"><legend>幫誰買幾個</legend>
+        <div id="buyers"></div>
+        <button type="button" class="btn btn-small" id="add-buyer">＋ 加一位</button>
+        <p class="muted fine" id="buyer-hint" aria-live="polite"></p>
+        <p class="field-error" id="buyer-error" hidden>個數請填 1 以上的數字。</p>
+      </fieldset>
       <datalist id="people-options">${[...people].map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
       <label class="field"><span>備註</span><textarea id="f-note" rows="2">${esc(item?.note)}</textarea></label>
 
@@ -708,6 +728,51 @@ async function openItemSheet(id) {
   };
   updateLivePrice();
   $('#item-form', sheet).addEventListener('input', updateLivePrice);
+
+  // ---- 幫誰買幾個：每列一個名字和個數，沒分配到的算自己 ----
+  const buyersBox = $('#buyers', sheet);
+  const buyerRow = (b = { name: '', qty: 1 }) => `<div class="buyer-row">
+      <input class="buyer-name" list="people-options" value="${esc(b.name)}" placeholder="名字" autocomplete="off" aria-label="幫誰買">
+      <input class="buyer-qty" inputmode="numeric" value="${esc(b.qty)}" autocomplete="off" aria-label="個數">
+      <span class="buyer-unit">個</span>
+      <button type="button" class="buyer-remove" aria-label="移除這一位">${CLOSE_ICON}</button>
+    </div>`;
+  const readBuyers = () => [...buyersBox.querySelectorAll('.buyer-row')].map((row) => ({
+    name: $('.buyer-name', row).value.trim(),
+    qty: parseNumber($('.buyer-qty', row).value),
+  }));
+  const updateBuyerHint = ({ bumpQty = false } = {}) => {
+    const named = readBuyers().filter((b) => b.name && b.qty > 0);
+    const assigned = named.reduce((total, b) => total + Math.round(b.qty), 0);
+    const qtyInput = $('#f-qty', sheet);
+    let qty = Math.round(parseNumber(qtyInput.value) || 1);
+    if (bumpQty && assigned > qty) {
+      qty = assigned;
+      qtyInput.value = String(qty);
+    }
+    const hint = $('#buyer-hint', sheet);
+    if (!named.length) hint.textContent = '沒填名字的都算自己買的。';
+    else if (assigned > qty) hint.textContent = `幫人買的合計 ${assigned} 個，比數量多，儲存時數量會改成 ${assigned}。`;
+    else if (assigned < qty) hint.textContent = `幫人買 ${assigned} 個，其餘 ${qty - assigned} 個算自己。`;
+    else hint.textContent = `${assigned} 個全部是幫人買的。`;
+  };
+  const initialBuyers = model.buyersOf(item);
+  buyersBox.innerHTML = (initialBuyers.length ? initialBuyers : [undefined]).map(buyerRow).join('');
+  updateBuyerHint();
+  buyersBox.addEventListener('input', () => updateBuyerHint({ bumpQty: true }));
+  $('#f-qty', sheet).addEventListener('input', () => updateBuyerHint());
+  $('#add-buyer', sheet).addEventListener('click', () => {
+    buyersBox.insertAdjacentHTML('beforeend', buyerRow());
+    $('.buyer-row:last-child .buyer-name', buyersBox).focus();
+    updateBuyerHint();
+  });
+  buyersBox.addEventListener('click', (event) => {
+    const remove = event.target.closest('.buyer-remove');
+    if (!remove) return;
+    remove.closest('.buyer-row').remove();
+    if (!buyersBox.children.length) buyersBox.innerHTML = buyerRow();
+    updateBuyerHint();
+  });
   $('#f-cat', sheet).addEventListener('change', (event) => {
     $('#f-rate', sheet).value = String(getCategory(c, event.target.value).taxRate);
     updateLivePrice();
@@ -784,14 +849,17 @@ async function openItemSheet(id) {
       amount: parseNumber($('#f-amount', sheet).value),
       packCount: parseNumber($('#f-pack', sheet).value),
     };
+    const buyers = readBuyers().filter((b) => b.name);
+    const badBuyer = buyers.some((b) => b.qty == null || Number.isNaN(b.qty) || b.qty < 1);
     const badNumber = Object.values(numbers).some(Number.isNaN);
     $('#name-error', sheet).hidden = Boolean(name);
     $('#price-error', sheet).hidden = !badNumber;
+    $('#buyer-error', sheet).hidden = !badBuyer;
     if (!name) {
       $('#f-name', sheet).focus();
       return;
     }
-    if (badNumber) return;
+    if (badNumber || badBuyer) return;
     const button = $('#save-item', sheet);
     button.disabled = true;
     try {
@@ -813,7 +881,7 @@ async function openItemSheet(id) {
           taxMode: $('input[name="tax"]:checked', sheet).value,
           taxRate: Number($('#f-rate', sheet).value),
           storeName: $('#f-store', sheet).value,
-          forWhom: $('#f-for', sheet).value,
+          buyers,
           note: $('#f-note', sheet).value,
         },
         photosChanged ? photos.map((p) => (p.draft ? { draft: p.draft } : { id: p.id })) : null,

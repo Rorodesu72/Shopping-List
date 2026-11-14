@@ -337,6 +337,18 @@ dialog::backdrop { background: rgb(8 12 28 / 0.55); }
 .facts dt { flex: none; color: var(--muted); font-size: 14px; }
 .facts dd { text-align: right; font-variant-numeric: tabular-nums; }
 .steps { display: flex; flex-direction: column; gap: 8px; padding-left: 22px; }
+.buyers-field { gap: 6px; border: 0; margin: 0; padding: 0; }
+.buyers-field > .btn { align-self: flex-start; }
+#buyers { display: flex; flex-direction: column; gap: 6px; }
+.buyer-row { display: flex; align-items: center; gap: 6px; }
+.field .buyer-row .buyer-name { flex: 1; min-width: 0; }
+.field .buyer-row .buyer-qty { flex: none; width: 64px; text-align: center; }
+.buyer-unit { flex: none; color: var(--muted); font-size: 14px; }
+.buyer-remove {
+  flex: none; width: 36px; height: 36px; display: grid; place-items: center; padding: 0;
+  background: none; border: 0; color: var(--muted);
+}
+.buyer-remove svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 .photo-field { display: flex; flex-direction: column; gap: 6px; }
 .photo-strip { display: flex; flex-wrap: wrap; gap: 10px; }
 .photo-cell { position: relative; flex: none; }
