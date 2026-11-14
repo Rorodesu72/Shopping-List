@@ -340,7 +340,7 @@ function breakdownRows(entries, total) {
       const share = total > 0 ? Math.round((amount / total) * 100) : 0;
       return `<div class="bar-row">
         <div class="bar-label"><span>${esc(name)}</span><span class="num">${money(amount)}</span></div>
-        <div class="bar"><span style="width:${share}%"></span></div>
+        <div class="bar"><span data-width="${share}"></span></div>
       </div>`;
     })
     .join('');
@@ -372,7 +372,7 @@ function renderSpend() {
     budgetBlock = `<section class="panel">
       <h2 class="panel-title">預算 ${formatTwd(budget)}</h2>
       <div class="budget-bar" role="img" aria-label="已花 ${spentShare}%，全部買完佔預算 ${spentShare + plannedShare}%">
-        <span class="spent" style="width:${spentShare}%"></span><span class="planned" style="width:${plannedShare}%"></span>
+        <span class="spent" data-width="${spentShare}"></span><span class="planned" data-width="${plannedShare}"></span>
       </div>
       <p class="${over ? 'text-warn' : 'muted'}">${over ? `全部買完會超出 ${formatTwd(totalTwd - budget)}` : `全部買完還剩 ${formatTwd(budget - totalTwd)}`}</p>
     </section>`;
@@ -420,7 +420,7 @@ function renderPrep() {
   $('#view').innerHTML = `
     ${tasks.length ? `<section class="panel">
       <h2 class="panel-title">已辦 ${done.length}/${tasks.length}</h2>
-      <div class="bar" role="img" aria-label="完成 ${share}%"><span style="width:${share}%"></span></div>
+      <div class="bar" role="img" aria-label="完成 ${share}%"><span data-width="${share}"></span></div>
       <p class="muted">${todo.length ? `還有 ${todo.length} 項要辦` : '都辦好了，出發吧！'}</p>
     </section>` : ''}
     <form id="task-form" class="task-add" novalidate>
@@ -1355,6 +1355,13 @@ function watchForUpdates() {
     });
   }).catch(() => {});
 }
+
+// 安全政策不允許 HTML 裡的 style 屬性，長條圖寬度改由這裡設定。
+function applyWidths(root) {
+  for (const el of root.querySelectorAll('[data-width]')) el.style.width = `${el.dataset.width}%`;
+}
+
+new MutationObserver(() => applyWidths($('#view'))).observe($('#view'), { childList: true, subtree: true });
 
 async function start() {
   await refresh();
