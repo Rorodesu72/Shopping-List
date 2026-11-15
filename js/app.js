@@ -642,7 +642,6 @@ async function openItemSheet(id) {
   const taxMode = item?.taxMode ?? c.defaultTaxMode;
   const taxRate = item?.taxRate ?? category.taxRate;
   const storeNames = new Set([...c.stores, ...[...state.stores.values()].filter((s) => s.countryCode === c.code).map((s) => s.name)]);
-  const people = new Set(state.items.flatMap((i) => model.buyersOf(i).map((b) => b.name)));
   // 表單上的照片，依顯示順序：已存的照片有 id，剛加入的有 draft（壓縮後的大圖與縮圖）。
   const photos = model.photoIdsOf(item)
     .filter((pid) => state.thumbs.has(pid))
@@ -699,7 +698,6 @@ async function openItemSheet(id) {
         <p class="muted fine" id="buyer-hint" aria-live="polite"></p>
         <p class="field-error" id="buyer-error" hidden>個數請填 1 以上的數字。</p>
       </fieldset>
-      <datalist id="people-options">${[...people].map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
       <label class="field"><span>備註</span><textarea id="f-note" rows="2">${esc(item?.note)}</textarea></label>
 
       <div class="sheet-actions">
@@ -732,7 +730,7 @@ async function openItemSheet(id) {
   // ---- 幫誰買幾個：每列一個名字和個數，沒分配到的算自己 ----
   const buyersBox = $('#buyers', sheet);
   const buyerRow = (b = { name: '', qty: 1 }) => `<div class="buyer-row">
-      <input class="buyer-name" list="people-options" value="${esc(b.name)}" placeholder="名字" autocomplete="off" aria-label="幫誰買">
+      <input class="buyer-name" value="${esc(b.name)}" placeholder="名字" autocomplete="off" aria-label="幫誰買">
       <input class="buyer-qty" inputmode="numeric" value="${esc(b.qty)}" autocomplete="off" aria-label="個數">
       <span class="buyer-unit">個</span>
       <button type="button" class="buyer-remove" aria-label="移除這一位">${CLOSE_ICON}</button>
