@@ -1,5 +1,5 @@
 import { get, getAll, getMeta, setMeta } from './db.js';
-import { getCategory, getCountry } from './countries.js';
+import { getCountry } from './countries.js';
 import { convert, currencies, currencyOf, formatMoney, formatTwd, itemUnitPrice, itemUnitPriceIn, parseNumber, summarize, taxIncluded } from './money.js';
 import { compressPhoto } from './images.js';
 import * as model from './model.js';
@@ -15,6 +15,7 @@ const state = {
   trips: [],
   items: [],
   tasks: [],
+  categories: [],
   products: new Map(),
   variants: new Map(),
   stores: new Map(),
@@ -37,6 +38,13 @@ const DECODE_WAIT_MS = 200;
 const SWIPE_PX = 40;
 
 const country = () => getCountry(state.trip.countryCode);
+// 分類：內建的在前，自訂的接在後面，「其他」固定排最後；找不到的分類（例如自訂分類被刪掉）歸到「其他」。
+const categories = () => {
+  const builtIn = country().categories;
+  return [...builtIn.slice(0, -1), ...state.categories, builtIn[builtIn.length - 1]];
+};
+const categoryOf = (id) => categories().find((cat) => cat.id === id) ?? categories()[categories().length - 1];
+const NEW_CATEGORY = '__new__';
 // 統計金額用的幣別（使用者在標題或設定切換），另一種幣別當作「≈」參考。
 const displayCode = () => (state.displayCurrency === 'TWD' ? 'TWD' : country().currency);
 const currencyLabel = (cur) => `${cur.symbol} ${cur.name || cur.code}`;
@@ -71,12 +79,13 @@ function variantLabel(variant) {
 
 async function load() {
   state.trip = await model.ensureInitialData();
-  const [trips, items, products, variants, stores, photos, tasks] = await Promise.all(
-    ['trips', 'items', 'products', 'variants', 'stores', 'photos', 'tasks'].map(getAll),
+  const [trips, items, products, variants, stores, photos, tasks, categories] = await Promise.all(
+    ['trips', 'items', 'products', 'variants', 'stores', 'photos', 'tasks', 'categories'].map(getAll),
   );
   state.trips = trips.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.items = items.filter((i) => i.tripId === state.trip.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.tasks = tasks.filter((t) => t.tripId === state.trip.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  state.categories = categories.filter((cat) => cat.countryCode === state.trip.countryCode).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.products = new Map(products.map((p) => [p.id, p]));
   state.variants = new Map(variants.map((v) => [v.id, v]));
   state.stores = new Map(stores.map((s) => [s.id, s]));
@@ -211,7 +220,7 @@ function renderList() {
   const hasSamples = state.items.some((i) => i.sample);
   const c = country();
   // 分類裡的品項都刪光時，回到全部，免得畫面只剩「找不到」。
-  if (state.cat !== 'all' && !state.items.some((i) => state.products.get(i.productId)?.categoryId === state.cat)) state.cat = 'all';
+  if (state.cat !== 'all' && !state.items.some((i) => categoryOf(state.products.get(i.productId)?.categoryId).id === state.cat)) state.cat = 'all';
   $('#view').innerHTML = `
     ${installBanner()}
     ${backupBanner()}
@@ -225,8 +234,8 @@ function renderList() {
           .map(([id, name]) => `<button type="button" class="chip ${state.status === id ? 'on' : ''}" data-action="status" data-value="${id}" aria-pressed="${state.status === id}">${name}</button>`)
           .join('')}
         <span class="chip-gap"></span>
-        ${c.categories
-          .filter((cat) => state.items.some((i) => state.products.get(i.productId)?.categoryId === cat.id))
+        ${categories()
+          .filter((cat) => state.items.some((i) => categoryOf(state.products.get(i.productId)?.categoryId).id === cat.id))
           .map((cat) => `<button type="button" class="chip ${state.cat === cat.id ? 'on' : ''}" data-action="cat" data-value="${cat.id}" aria-pressed="${state.cat === cat.id}">${esc(cat.name)}</button>`)
           .join('')}
       </div>
@@ -252,7 +261,7 @@ function renderListBody() {
     const product = state.products.get(item.productId);
     if (state.status === 'todo' && item.purchased) return false;
     if (state.status === 'done' && !item.purchased) return false;
-    if (state.cat !== 'all' && product?.categoryId !== state.cat) return false;
+    if (state.cat !== 'all' && categoryOf(product?.categoryId).id !== state.cat) return false;
     if (!q) return true;
     const text = [product?.name, product?.foreignName, state.stores.get(item.storeId)?.name, ...model.buyersOf(item).map((b) => b.name), item.note].join(' ').toLowerCase();
     return text.includes(q);
@@ -268,9 +277,9 @@ function renderListBody() {
     if (s.total > 0) parts.push(`約 ${money(s.total)}`);
     return parts.join(' · ');
   };
-  const groups = c.categories
+  const groups = categories()
     .map((cat) => {
-      const rows = visible.filter((i) => getCategory(c, state.products.get(i.productId)?.categoryId).id === cat.id);
+      const rows = visible.filter((i) => categoryOf(state.products.get(i.productId)?.categoryId).id === cat.id);
       if (!rows.length) return '';
       return `<section class="group">
         <h2 class="group-title">${esc(cat.name)}<span class="group-stats">${esc(stats(rows))}</span></h2>
@@ -395,7 +404,7 @@ function renderSpend() {
     budgetBlock = '<section class="panel"><p class="muted">要比較預算，請先到設定填匯率。</p></section>';
   }
   const stat = (label, value) => `<div class="stat"><span class="stat-label">${label}</span><span class="stat-value">${money(value)}</span>${alsoIn(value) ? `<span class="stat-twd">≈ ${alsoIn(value)}</span>` : ''}</div>`;
-  const byCategory = groupAmounts((i) => getCategory(c, state.products.get(i.productId)?.categoryId).name);
+  const byCategory = groupAmounts((i) => categoryOf(state.products.get(i.productId)?.categoryId).name);
   const byStore = groupAmounts((i) => state.stores.get(i.storeId)?.name || '未指定店家');
   const byPerson = groupAmounts((i) => model.allocationsOf(i).map((a) => [a.name || '自己', a.qty]));
   $('#view').innerHTML = `
@@ -543,6 +552,21 @@ async function renderSettings() {
     </section>
 
     <section class="panel">
+      <h2 class="panel-title">自訂分類</h2>
+      ${state.categories.length ? `<div class="cat-list">
+        ${state.categories.map((cat) => `<div class="cat-row">
+          <input data-cat-id="${esc(cat.id)}" value="${esc(cat.name)}" autocomplete="off" aria-label="分類名稱">
+          <button type="button" class="btn btn-small btn-danger" data-action="delete-category" data-id="${esc(cat.id)}">刪除</button>
+        </div>`).join('')}
+      </div>` : '<p class="muted">還沒有自訂分類。</p>'}
+      <form id="cat-form" class="task-add" novalidate>
+        <label class="search"><span class="sr-only">新增分類</span><input id="cat-input" placeholder="新增分類，例如 吉伊卡哇" autocomplete="off" enterkeyhint="done"></label>
+        <button type="submit" class="btn btn-primary">新增</button>
+      </form>
+      <p class="muted fine">改名稱後點其他地方就會儲存。刪除分類後，裡面的品項會移到「其他」。新增品項時也能從分類選單選「＋ 自訂分類」。</p>
+    </section>
+
+    <section class="panel">
       <h2 class="panel-title">備份</h2>
       <p class="muted">上次備份：${esc(formatDateTime(state.meta.lastBackupAt))}${hasUnsavedBackup() ? '，之後有變更尚未備份' : ''}</p>
       <div class="btn-row">
@@ -559,6 +583,19 @@ async function renderSettings() {
       <p class="muted">${isStandalone() ? '目前是從主畫面開啟。刪除主畫面圖示通常會一併刪除資料，刪除前請先備份。' : '目前是從瀏覽器開啟，這裡的資料和主畫面 App 是分開的。'}</p>
       ${isStandalone() ? '' : '<div class="btn-row"><button type="button" class="btn" data-action="install-help">查看安裝步驟</button></div>'}
     </section>`;
+
+  $('#cat-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = $('#cat-input').value.trim();
+    if (!name) {
+      $('#cat-input').focus();
+      return;
+    }
+    const before = state.categories.length;
+    await model.addCategory(state.trip.countryCode, name);
+    await refresh();
+    showToast(state.categories.length > before ? '已新增分類' : '已經有這個分類了');
+  });
 
   const estimate = await navigator.storage?.estimate?.().catch(() => null);
   const info = $('#storage-info');
@@ -638,7 +675,7 @@ async function openItemSheet(id) {
   const item = id ? await get('items', id) : null;
   const product = item ? state.products.get(item.productId) : null;
   const variant = item ? state.variants.get(item.variantId) : null;
-  const category = getCategory(c, product?.categoryId ?? c.categories[0].id);
+  const category = categoryOf(product?.categoryId ?? categories()[0].id);
   const taxMode = item?.taxMode ?? c.defaultTaxMode;
   const taxRate = item?.taxRate ?? category.taxRate;
   const storeNames = new Set([...c.stores, ...[...state.stores.values()].filter((s) => s.countryCode === c.code).map((s) => s.name)]);
@@ -662,8 +699,13 @@ async function openItemSheet(id) {
       <label class="field"><span>日文名稱</span><input id="f-foreign" lang="ja" value="${esc(product?.foreignName)}" autocomplete="off" placeholder="給店員看時會放大顯示"></label>
 
       <div class="field-grid">
-        <label class="field"><span>分類</span><select id="f-cat">${c.categories.map((cat) => `<option value="${cat.id}" ${cat.id === category.id ? 'selected' : ''}>${esc(cat.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>分類</span><select id="f-cat">${categories().map((cat) => `<option value="${esc(cat.id)}" ${cat.id === category.id ? 'selected' : ''}>${esc(cat.name)}</option>`).join('')}<option value="${NEW_CATEGORY}">＋ 自訂分類</option></select></label>
         <label class="field"><span>數量</span><input id="f-qty" inputmode="numeric" value="${item?.qty ?? 1}" autocomplete="off"></label>
+      </div>
+      <div class="new-cat" id="new-cat" hidden>
+        <input id="new-cat-name" placeholder="新分類名稱，例如 吉伊卡哇" autocomplete="off" aria-label="新分類名稱" enterkeyhint="done">
+        <button type="button" class="btn btn-primary btn-small" id="new-cat-add">加入</button>
+        <button type="button" class="btn btn-quiet btn-small" id="new-cat-cancel">取消</button>
       </div>
 
       <div class="field-grid">
@@ -771,9 +813,51 @@ async function openItemSheet(id) {
     if (!buyersBox.children.length) buyersBox.innerHTML = buyerRow();
     updateBuyerHint();
   });
+  // 選「＋ 自訂分類」時，選單先回到原本的分類，下面展開輸入新分類名稱的欄位。
+  let lastCategoryId = category.id;
+  const newCatRow = $('#new-cat', sheet);
+  const closeNewCat = () => {
+    newCatRow.hidden = true;
+    $('#new-cat-name', sheet).value = '';
+  };
   $('#f-cat', sheet).addEventListener('change', (event) => {
-    $('#f-rate', sheet).value = String(getCategory(c, event.target.value).taxRate);
+    if (event.target.value === NEW_CATEGORY) {
+      event.target.value = lastCategoryId;
+      newCatRow.hidden = false;
+      $('#new-cat-name', sheet).focus();
+      return;
+    }
+    lastCategoryId = event.target.value;
+    $('#f-rate', sheet).value = String(categoryOf(event.target.value).taxRate);
     updateLivePrice();
+  });
+  const addNewCategory = async () => {
+    const name = $('#new-cat-name', sheet).value.trim();
+    if (!name) {
+      $('#new-cat-name', sheet).focus();
+      return;
+    }
+    const created = await model.addCategory(state.trip.countryCode, name);
+    if (!state.categories.some((cat) => cat.id === created.id) && !country().categories.some((cat) => cat.id === created.id)) {
+      state.categories.push(created);
+    }
+    const select = $('#f-cat', sheet);
+    if (![...select.options].some((o) => o.value === created.id)) {
+      // 新分類放在「其他」前面，跟清單排序一致。
+      select.options[select.options.length - 2].before(new Option(created.name, created.id));
+    }
+    select.value = created.id;
+    lastCategoryId = created.id;
+    $('#f-rate', sheet).value = String(created.taxRate);
+    updateLivePrice();
+    closeNewCat();
+  };
+  $('#new-cat-add', sheet).addEventListener('click', addNewCategory);
+  $('#new-cat-cancel', sheet).addEventListener('click', closeNewCat);
+  $('#new-cat-name', sheet).addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    addNewCategory();
   });
 
   const renderPhotos = () => {
@@ -1333,6 +1417,22 @@ const actions = {
   },
   'switch-trip': async (el) => { await model.setActiveTrip(el.dataset.id); state.cat = 'all'; await refresh(); },
   'toggle-task': async (el) => { await model.toggleTask(el.dataset.id); await refresh(); },
+  'delete-category': async (el) => {
+    const cat = state.categories.find((c) => c.id === el.dataset.id);
+    if (!cat) return;
+    const used = state.items.filter((i) => state.products.get(i.productId)?.categoryId === cat.id).length;
+    const ok = await confirmDialog({
+      title: `刪除「${cat.name}」分類？`,
+      body: used ? `這趟有 ${used} 樣品項在這個分類，會移到「其他」，品項本身不會刪除。` : '這個分類目前沒有品項。',
+      ok: '刪除',
+      danger: true,
+    });
+    if (!ok) return;
+    await model.deleteCategory(cat.id);
+    if (state.cat === cat.id) state.cat = 'all';
+    await refresh();
+    showToast('已刪除分類');
+  },
   'edit-task': (el) => openTaskSheet(el.dataset.id),
   'add-default-tasks': async () => {
     const count = await model.addDefaultTasks(state.trip);
@@ -1372,8 +1472,20 @@ document.addEventListener('contextmenu', (event) => {
   if (event.target.closest('.zoomable, .viewer, .clerk')) event.preventDefault();
 });
 
-$('#view').addEventListener('change', (event) => {
+$('#view').addEventListener('change', async (event) => {
   if (event.target.dataset.setting) saveSetting(event.target);
+  const catId = event.target.dataset.catId;
+  if (catId) {
+    const name = event.target.value.trim();
+    if (!name) {
+      event.target.value = state.categories.find((c) => c.id === catId)?.name ?? '';
+      showToast('分類名稱不能空白');
+      return;
+    }
+    await model.renameCategory(catId, name);
+    await refresh();
+    showToast('已儲存');
+  }
 });
 
 $('#top').addEventListener('change', async (event) => {

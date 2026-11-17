@@ -259,6 +259,35 @@ export async function deleteItem(id, { mark = true } = {}) {
   if (mark) await markChanged();
 }
 
+// ---- 自訂分類 ----
+// 依國家存放，同一個國家的所有旅程共用。
+
+export async function addCategory(countryCode, name) {
+  const trimmed = name.trim();
+  const country = getCountry(countryCode);
+  const builtIn = country.categories.find((c) => normalize(c.name) === normalize(trimmed));
+  if (builtIn) return builtIn;
+  const custom = (await getAll('categories')).find((c) => c.countryCode === countryCode && normalize(c.name) === normalize(trimmed));
+  if (custom) return custom;
+  const category = { id: newId('cat'), countryCode, name: trimmed, taxRate: country.defaultTaxRate, createdAt: now() };
+  await put('categories', category);
+  await markChanged();
+  return category;
+}
+
+export async function renameCategory(id, name) {
+  const category = await get('categories', id);
+  if (!category || !name.trim()) return;
+  await put('categories', { ...category, name: name.trim() });
+  await markChanged();
+}
+
+// 刪除後，用到這個分類的商品會歸到「其他」。
+export async function deleteCategory(id) {
+  await remove('categories', id);
+  await markChanged();
+}
+
 // ---- 行程準備 ----
 
 export async function addTask(tripId, title, note = '') {

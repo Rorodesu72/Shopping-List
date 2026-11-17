@@ -1,11 +1,11 @@
 // IndexedDB 薄封裝。
 const DB_NAME = 'travel-shopping-list';
-// 版本 2：新增 tasks（行程準備事項）。
-const DB_VERSION = 2;
+// 版本 2：新增 tasks（行程準備事項）。版本 3：新增 categories（自訂分類）。
+const DB_VERSION = 3;
 
-export const DATA_STORES = ['trips', 'products', 'variants', 'items', 'stores', 'priceRecords', 'tasks'];
+export const DATA_STORES = ['trips', 'products', 'variants', 'items', 'stores', 'priceRecords', 'tasks', 'categories'];
 // 較晚才加入的資料表，舊備份裡沒有時當作空的。
-export const OPTIONAL_STORES = ['tasks'];
+export const OPTIONAL_STORES = ['tasks', 'categories'];
 export const PHOTO_STORE = 'photos';
 const META_STORE = 'meta';
 

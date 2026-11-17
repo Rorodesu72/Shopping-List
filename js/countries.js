@@ -22,6 +22,7 @@ export const COUNTRIES = {
       { id: 'home', name: '生活用品', taxRate: 10 },
       { id: 'fashion', name: '服飾配件', taxRate: 10 },
       { id: 'tech', name: '3C 家電', taxRate: 10 },
+      { id: 'pokemon', name: '寶可夢中心', taxRate: 10 },
       { id: 'other', name: '其他', taxRate: 10 },
     ],
     stores: ['松本清', '唐吉訶德', 'Sundrug', 'Welcia', 'Costco', 'AEON', 'BIC CAMERA', 'UNIQLO', '機場免稅店'],
