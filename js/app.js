@@ -516,14 +516,26 @@ async function openTaskSheet(id) {
 const WARN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2zM12 10v5M12 18h.01"/></svg>';
 
 function avoidRow(avoid) {
+  const photoIds = model.photoIdsOf(avoid).filter((pid) => state.thumbs.has(pid));
   return `
-    <button type="button" class="avoid" data-action="edit-avoid" data-id="${esc(avoid.id)}">
-      <span class="avoid-icon">${WARN_ICON}</span>
-      <span class="item-text">
-        <span class="item-name">${esc(avoid.title)}</span>
-        ${avoid.note ? `<span class="avoid-note">${esc(avoid.note)}</span>` : ''}
-      </span>
-    </button>`;
+    <article class="avoid">
+      <button type="button" class="avoid-main" data-action="edit-avoid" data-id="${esc(avoid.id)}">
+        <span class="avoid-icon">${WARN_ICON}</span>
+        <span class="item-text">
+          <span class="item-name">${esc(avoid.title)}</span>
+          ${avoid.note ? `<span class="avoid-note">${esc(avoid.note)}</span>` : ''}
+        </span>
+      </button>
+      ${photoIds.length ? `<div class="avoid-photos">
+        ${photoIds.map((pid, i) => `<button type="button" class="avoid-thumb zoomable" data-action="avoid-photo" data-id="${esc(avoid.id)}" data-index="${i}" aria-label="看大圖：${esc(avoid.title)} 第 ${i + 1} 張"><img src="${state.thumbs.get(pid)}" alt=""></button>`).join('')}
+      </div>` : ''}
+    </article>`;
+}
+
+function openAvoidPhotos(avoidId, index) {
+  const avoid = state.avoids.find((a) => a.id === avoidId);
+  const ids = model.photoIdsOf(avoid).filter((pid) => state.thumbs.has(pid));
+  if (ids.length) openPhoto({ sources: ids, index });
 }
 
 function renderAvoid() {
@@ -536,17 +548,19 @@ function renderAvoid() {
       <label class="field"><span>原因（可不填）</span>
         <input id="avoid-note" placeholder="例如 味道很刺鼻、比別家貴" autocomplete="off" enterkeyhint="done">
       </label>
+      ${photoFieldHtml('avoid-photo')}
       <p class="field-error" id="avoid-error" hidden>請填要避開的項目。</p>
-      <button type="submit" class="btn btn-primary">加入地雷清單</button>
+      <button type="submit" class="btn btn-primary" id="avoid-submit">加入地雷清單</button>
     </form>
     ${avoids.length ? `<section class="group">
       <h2 class="group-title">地雷清單<span class="group-stats">${avoids.length} 項</span></h2>
       ${avoids.map(avoidRow).join('')}
     </section>
-    <p class="muted fine pad">${esc(country().name)}的所有清單共用，下次去${esc(country().name)}也看得到。點項目可以修改或刪除。</p>` : `<div class="empty-state">
+    <p class="muted fine pad">${esc(country().name)}的所有清單共用，下次去${esc(country().name)}也看得到。點項目可以修改或刪除，點照片看大圖。</p>` : `<div class="empty-state">
       <h2>還沒有地雷</h2>
       <p>踩過的雷、聽說不好的東西記在這裡，下次就不會再買錯。</p>
     </div>`}`;
+  const picker = setupPhotoPicker($('#avoid-form'), 'avoid-photo');
   $('#avoid-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const title = $('#avoid-title').value.trim();
@@ -555,9 +569,17 @@ function renderAvoid() {
       $('#avoid-title').focus();
       return;
     }
-    await model.addAvoid(state.trip.countryCode, title, $('#avoid-note').value);
-    await refresh();
-    showToast('已加入地雷清單');
+    const button = $('#avoid-submit');
+    button.disabled = true;
+    try {
+      await model.addAvoid(state.trip.countryCode, title, $('#avoid-note').value, picker.payload());
+      picker.revokeDrafts();
+      await refresh();
+      showToast('已加入地雷清單');
+    } catch {
+      button.disabled = false;
+      showToast('儲存失敗，手機空間可能不足。請清出空間後再試一次。');
+    }
   });
 }
 
@@ -567,18 +589,21 @@ async function openAvoidSheet(id) {
   const sheet = openSheet(`
     ${sheetHeader('編輯地雷')}
     <form id="avoid-edit" novalidate>
+      ${photoFieldHtml('ae-photo')}
       <label class="field"><span>要避開的項目（必填）</span><input id="ae-title" value="${esc(avoid.title)}" autocomplete="off"></label>
       <p class="field-error" id="ae-error" hidden>請填要避開的項目。</p>
       <label class="field"><span>原因</span><textarea id="ae-note" rows="3">${esc(avoid.note)}</textarea></label>
       <div class="sheet-actions">
         <button type="button" class="btn btn-danger" id="ae-delete">刪除</button>
-        <button type="submit" class="btn btn-primary">儲存</button>
+        <button type="submit" class="btn btn-primary" id="ae-save">儲存</button>
       </div>
     </form>`);
+  const picker = setupPhotoPicker(sheet, 'ae-photo', model.photoIdsOf(avoid));
   $('#ae-delete', sheet).addEventListener('click', async () => {
-    const ok = await confirmDialog({ title: '刪除這個地雷？', body: `「${avoid.title}」會從地雷清單刪除。`, ok: '刪除', danger: true });
+    const ok = await confirmDialog({ title: '刪除這個地雷？', body: `「${avoid.title}」和它的照片會從地雷清單刪除。`, ok: '刪除', danger: true });
     if (!ok) return;
     await model.deleteAvoid(avoid.id);
+    picker.revokeDrafts();
     closeSheet();
     await refresh();
     showToast('已刪除');
@@ -588,10 +613,18 @@ async function openAvoidSheet(id) {
     const title = $('#ae-title', sheet).value.trim();
     $('#ae-error', sheet).hidden = Boolean(title);
     if (!title) return;
-    await model.updateAvoid(avoid.id, { title, note: $('#ae-note', sheet).value });
-    closeSheet();
-    await refresh();
-    showToast('已儲存');
+    const button = $('#ae-save', sheet);
+    button.disabled = true;
+    try {
+      await model.updateAvoid(avoid.id, { title, note: $('#ae-note', sheet).value, photos: picker.payload() });
+      picker.revokeDrafts();
+      closeSheet();
+      await refresh();
+      showToast('已儲存');
+    } catch {
+      button.disabled = false;
+      showToast('儲存失敗，手機空間可能不足。請清出空間後再試一次。');
+    }
   });
 }
 
@@ -756,6 +789,85 @@ function priceField(key, label, value, code) {
   </div>`;
 }
 
+// 照片欄位：品項與地雷共用。prefix 決定元素 id（strip / file / status）。
+function photoFieldHtml(prefix) {
+  return `<div class="photo-field">
+    <div class="photo-strip" id="${prefix}-strip"></div>
+    <input id="${prefix}-file" class="sr-only" type="file" accept="image/*" multiple>
+    <p class="muted fine" id="${prefix}-status">可拍照或從相簿選，張數不限，存檔前會先壓縮。</p>
+  </div>`;
+}
+
+// 表單上的照片，依顯示順序：已存的照片有 id，剛加入的有 draft（壓縮後的大圖與縮圖）。
+function setupPhotoPicker(root, prefix, ids = []) {
+  const photos = ids
+    .filter((pid) => state.thumbs.has(pid))
+    .map((pid) => ({ id: pid, url: state.thumbs.get(pid) }));
+  let changed = false;
+  const strip = $(`#${prefix}-strip`, root);
+  const input = $(`#${prefix}-file`, root);
+  const status = $(`#${prefix}-status`, root);
+
+  const render = () => {
+    strip.innerHTML = `
+      ${photos.map((p, i) => `<div class="photo-cell">
+        <button type="button" class="photo-preview zoomable" data-view="${i}" aria-label="看大圖：第 ${i + 1} 張"><img src="${p.url}" alt=""></button>
+        <button type="button" class="photo-remove" data-remove="${i}" aria-label="移除第 ${i + 1} 張照片">${CLOSE_ICON}</button>
+      </div>`).join('')}
+      <label class="photo-add" for="${prefix}-file">${PHOTO_ICON}<span>${photos.length ? '再加照片' : '加照片'}</span></label>`;
+  };
+  render();
+
+  input.addEventListener('change', async (event) => {
+    const files = [...event.target.files];
+    event.target.value = '';
+    if (!files.length) return;
+    let added = 0;
+    let bytes = 0;
+    let lastError = null;
+    for (const [i, file] of files.entries()) {
+      status.textContent = files.length > 1 ? `正在壓縮照片（${i + 1}/${files.length}）…` : '正在壓縮照片…';
+      try {
+        const draft = await compressPhoto(file);
+        photos.push({ draft, url: URL.createObjectURL(draft.thumb) });
+        changed = true;
+        added += 1;
+        bytes += draft.full.size + draft.thumb.size;
+        render();
+      } catch (error) {
+        lastError = error.message;
+      }
+    }
+    const parts = [];
+    if (added) parts.push(`已加入 ${added} 張，壓縮後約 ${backup.formatBytes(bytes)}，共 ${photos.length} 張。`);
+    if (lastError) parts.push(added ? `另有 ${files.length - added} 張無法開啟。` : lastError);
+    status.textContent = parts.join('');
+  });
+
+  strip.addEventListener('click', (event) => {
+    const viewBtn = event.target.closest('[data-view]');
+    if (viewBtn) {
+      openPhoto({ sources: photos.map((p) => p.draft?.full ?? p.id), index: Number(viewBtn.dataset.view) });
+      return;
+    }
+    const removeBtn = event.target.closest('[data-remove]');
+    if (!removeBtn) return;
+    const [removed] = photos.splice(Number(removeBtn.dataset.remove), 1);
+    if (removed?.draft) URL.revokeObjectURL(removed.url);
+    changed = true;
+    render();
+    status.textContent = photos.length ? `儲存後會移除這張照片，剩 ${photos.length} 張。` : '儲存後會移除照片。';
+  });
+
+  return {
+    // 沒動過照片時回傳 null，存檔時保留原本的照片。
+    payload: () => (changed ? photos.map((p) => (p.draft ? { draft: p.draft } : { id: p.id })) : null),
+    revokeDrafts: () => {
+      for (const p of photos) if (p.draft) URL.revokeObjectURL(p.url);
+    },
+  };
+}
+
 async function openItemSheet(id) {
   const c = country();
   const item = id ? await get('items', id) : null;
@@ -765,20 +877,11 @@ async function openItemSheet(id) {
   const taxMode = item?.taxMode ?? c.defaultTaxMode;
   const taxRate = item?.taxRate ?? category.taxRate;
   const storeNames = new Set([...c.stores, ...[...state.stores.values()].filter((s) => s.countryCode === c.code).map((s) => s.name)]);
-  // 表單上的照片，依顯示順序：已存的照片有 id，剛加入的有 draft（壓縮後的大圖與縮圖）。
-  const photos = model.photoIdsOf(item)
-    .filter((pid) => state.thumbs.has(pid))
-    .map((pid) => ({ id: pid, url: state.thumbs.get(pid) }));
-  let photosChanged = false;
 
   const sheet = openSheet(`
     ${sheetHeader(item ? '編輯品項' : '新增品項')}
     <form id="item-form" novalidate>
-      <div class="photo-field">
-        <div class="photo-strip" id="photo-strip"></div>
-        <input id="f-photo" class="sr-only" type="file" accept="image/*" multiple>
-        <p class="muted fine" id="photo-status">可拍照或從相簿選，張數不限，存檔前會先壓縮。</p>
-      </div>
+      ${photoFieldHtml('f-photo')}
 
       <label class="field"><span>名稱（必填）</span><input id="f-name" value="${esc(product?.name)}" autocomplete="off" enterkeyhint="next"></label>
       <p class="field-error" id="name-error" hidden>請填商品名稱。</p>
@@ -946,57 +1049,7 @@ async function openItemSheet(id) {
     addNewCategory();
   });
 
-  const renderPhotos = () => {
-    $('#photo-strip', sheet).innerHTML = `
-      ${photos.map((p, i) => `<div class="photo-cell">
-        <button type="button" class="photo-preview zoomable" data-view="${i}" aria-label="看大圖：第 ${i + 1} 張"><img src="${p.url}" alt=""></button>
-        <button type="button" class="photo-remove" data-remove="${i}" aria-label="移除第 ${i + 1} 張照片">${CLOSE_ICON}</button>
-      </div>`).join('')}
-      <label class="photo-add" for="f-photo">${PHOTO_ICON}<span>${photos.length ? '再加照片' : '加照片'}</span></label>`;
-  };
-  renderPhotos();
-
-  $('#f-photo', sheet).addEventListener('change', async (event) => {
-    const files = [...event.target.files];
-    event.target.value = '';
-    if (!files.length) return;
-    const status = $('#photo-status', sheet);
-    let added = 0;
-    let bytes = 0;
-    let lastError = null;
-    for (const [i, file] of files.entries()) {
-      status.textContent = files.length > 1 ? `正在壓縮照片（${i + 1}/${files.length}）…` : '正在壓縮照片…';
-      try {
-        const draft = await compressPhoto(file);
-        photos.push({ draft, url: URL.createObjectURL(draft.thumb) });
-        photosChanged = true;
-        added += 1;
-        bytes += draft.full.size + draft.thumb.size;
-        renderPhotos();
-      } catch (error) {
-        lastError = error.message;
-      }
-    }
-    const parts = [];
-    if (added) parts.push(`已加入 ${added} 張，壓縮後約 ${backup.formatBytes(bytes)}，共 ${photos.length} 張。`);
-    if (lastError) parts.push(added ? `另有 ${files.length - added} 張無法開啟。` : lastError);
-    status.textContent = parts.join('');
-  });
-
-  $('#photo-strip', sheet).addEventListener('click', (event) => {
-    const viewBtn = event.target.closest('[data-view]');
-    if (viewBtn) {
-      openPhoto({ sources: photos.map((p) => p.draft?.full ?? p.id), index: Number(viewBtn.dataset.view) });
-      return;
-    }
-    const removeBtn = event.target.closest('[data-remove]');
-    if (!removeBtn) return;
-    const [removed] = photos.splice(Number(removeBtn.dataset.remove), 1);
-    if (removed?.draft) URL.revokeObjectURL(removed.url);
-    photosChanged = true;
-    renderPhotos();
-    $('#photo-status', sheet).textContent = photos.length ? `儲存後會移除這張照片，剩 ${photos.length} 張。` : '儲存後會移除照片。';
-  });
+  const picker = setupPhotoPicker(sheet, 'f-photo', model.photoIdsOf(item));
 
   $('#delete-item', sheet)?.addEventListener('click', async () => {
     const ok = await confirmDialog({ title: '刪除這個品項？', body: `「${product?.name}」和它的照片、價格紀錄都會刪除。`, ok: '刪除', danger: true });
@@ -1052,9 +1105,9 @@ async function openItemSheet(id) {
           buyers,
           note: $('#f-note', sheet).value,
         },
-        photosChanged ? photos.map((p) => (p.draft ? { draft: p.draft } : { id: p.id })) : null,
+        picker.payload(),
       );
-      for (const p of photos) if (p.draft) URL.revokeObjectURL(p.url);
+      picker.revokeDrafts();
       closeSheet();
       await refresh();
       showToast('已儲存');
@@ -1504,6 +1557,7 @@ const actions = {
   'switch-trip': async (el) => { await model.setActiveTrip(el.dataset.id); state.cat = 'all'; await refresh(); },
   'toggle-task': async (el) => { await model.toggleTask(el.dataset.id); await refresh(); },
   'edit-avoid': (el) => openAvoidSheet(el.dataset.id),
+  'avoid-photo': (el) => openAvoidPhotos(el.dataset.id, Number(el.dataset.index)),
   'delete-category': async (el) => {
     const cat = state.categories.find((c) => c.id === el.dataset.id);
     if (!cat) return;

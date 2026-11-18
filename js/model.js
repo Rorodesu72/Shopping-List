@@ -150,10 +150,30 @@ async function findOrCreateStore(name, countryCode) {
   return id;
 }
 
-async function deletePhotoIfUnused(photoId, exceptItemId) {
+// 把表單上的照片存起來，回傳最終的 id 順序與新增張數。photos 為 null 表示照片不變。
+async function persistPhotos(photos, oldPhotoIds) {
+  if (!photos) return { photoIds: oldPhotoIds, added: 0 };
+  const photoIds = [];
+  let added = 0;
+  for (const photo of photos) {
+    if (photo.id) {
+      photoIds.push(photo.id);
+      continue;
+    }
+    const id = newId('photo');
+    await put('photos', { id, full: photo.draft.full, thumb: photo.draft.thumb, createdAt: now() });
+    photoIds.push(id);
+    added += 1;
+  }
+  return { photoIds, added };
+}
+
+// 品項和地雷都可能用到同一張照片，兩邊都沒人用了才刪。
+async function deletePhotoIfUnused(photoId, exceptId) {
   if (!photoId) return;
-  const items = await getAll('items');
-  if (items.some((i) => i.id !== exceptItemId && photoIdsOf(i).includes(photoId))) return;
+  const [items, avoids] = await Promise.all([getAll('items'), getAll('avoids')]);
+  const inUse = (row) => row.id !== exceptId && photoIdsOf(row).includes(photoId);
+  if (items.some(inUse) || avoids.some(inUse)) return;
   await remove('photos', photoId);
 }
 
@@ -188,21 +208,7 @@ export async function saveItem(trip, form, photos = null) {
   const storeId = await findOrCreateStore(form.storeName, trip.countryCode);
 
   const oldPhotoIds = photoIdsOf(existing);
-  let photoIds = oldPhotoIds;
-  let addedPhotos = 0;
-  if (photos) {
-    photoIds = [];
-    for (const photo of photos) {
-      if (photo.id) {
-        photoIds.push(photo.id);
-        continue;
-      }
-      const id = newId('photo');
-      await put('photos', { id, full: photo.draft.full, thumb: photo.draft.thumb, createdAt: now() });
-      photoIds.push(id);
-      addedPhotos += 1;
-    }
-  }
+  const { photoIds, added: addedPhotos } = await persistPhotos(photos, oldPhotoIds);
 
   const purchased = existing?.purchased ?? false;
   const buyers = normalizeBuyers(form.buyers ?? buyersOf(existing));
@@ -291,22 +297,31 @@ export async function deleteCategory(id) {
 // ---- 避雷清單 ----
 // 依國家存放，同一個國家的所有旅程共用，下次去同一個國家還看得到。
 
-export async function addAvoid(countryCode, title, note = '') {
-  const avoid = { id: newId('avoid'), countryCode, title: title.trim(), note: note.trim(), createdAt: now(), updatedAt: now() };
+export async function addAvoid(countryCode, title, note = '', photos = null) {
+  const { photoIds, added } = await persistPhotos(photos, []);
+  const avoid = { id: newId('avoid'), countryCode, title: title.trim(), note: note.trim(), photoIds, createdAt: now(), updatedAt: now() };
   await put('avoids', avoid);
-  await markChanged();
+  await markChanged({ photos: added });
   return avoid;
 }
 
-export async function updateAvoid(id, { title, note }) {
+// photos 同 saveItem：不傳表示照片不變。
+export async function updateAvoid(id, { title, note, photos = null }) {
   const avoid = await get('avoids', id);
   if (!avoid) return;
-  await put('avoids', { ...avoid, title: title.trim(), note: (note || '').trim(), updatedAt: now() });
-  await markChanged();
+  const oldPhotoIds = photoIdsOf(avoid);
+  const { photoIds, added } = await persistPhotos(photos, oldPhotoIds);
+  await put('avoids', { ...avoid, title: title.trim(), note: (note || '').trim(), photoIds, updatedAt: now() });
+  for (const oldId of oldPhotoIds) {
+    if (!photoIds.includes(oldId)) await deletePhotoIfUnused(oldId, id);
+  }
+  await markChanged({ photos: added });
 }
 
 export async function deleteAvoid(id) {
+  const avoid = await get('avoids', id);
   await remove('avoids', id);
+  for (const photoId of photoIdsOf(avoid)) await deletePhotoIfUnused(photoId, id);
   await markChanged();
 }
 
