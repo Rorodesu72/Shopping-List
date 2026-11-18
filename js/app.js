@@ -16,6 +16,7 @@ const state = {
   items: [],
   tasks: [],
   categories: [],
+  avoids: [],
   products: new Map(),
   variants: new Map(),
   stores: new Map(),
@@ -79,13 +80,14 @@ function variantLabel(variant) {
 
 async function load() {
   state.trip = await model.ensureInitialData();
-  const [trips, items, products, variants, stores, photos, tasks, categories] = await Promise.all(
-    ['trips', 'items', 'products', 'variants', 'stores', 'photos', 'tasks', 'categories'].map(getAll),
+  const [trips, items, products, variants, stores, photos, tasks, categories, avoids] = await Promise.all(
+    ['trips', 'items', 'products', 'variants', 'stores', 'photos', 'tasks', 'categories', 'avoids'].map(getAll),
   );
   state.trips = trips.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.items = items.filter((i) => i.tripId === state.trip.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.tasks = tasks.filter((t) => t.tripId === state.trip.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.categories = categories.filter((cat) => cat.countryCode === state.trip.countryCode).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  state.avoids = avoids.filter((a) => a.countryCode === state.trip.countryCode).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   state.products = new Map(products.map((p) => [p.id, p]));
   state.variants = new Map(variants.map((v) => [v.id, v]));
   state.stores = new Map(stores.map((s) => [s.id, s]));
@@ -118,8 +120,8 @@ function render() {
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
-  $('#add-button').hidden = ['settings', 'spend', 'prep'].includes(state.tab);
-  const views = { list: renderList, stores: renderStores, people: renderPeople, spend: renderSpend, prep: renderPrep, settings: renderSettings };
+  $('#add-button').hidden = ['settings', 'spend', 'prep', 'avoid'].includes(state.tab);
+  const views = { list: renderList, stores: renderStores, people: renderPeople, spend: renderSpend, prep: renderPrep, avoid: renderAvoid, settings: renderSettings };
   views[state.tab]();
 }
 
@@ -503,6 +505,90 @@ async function openTaskSheet(id) {
     $('#te-error', sheet).hidden = Boolean(title);
     if (!title) return;
     await model.updateTask(task.id, { title, note: $('#te-note', sheet).value });
+    closeSheet();
+    await refresh();
+    showToast('已儲存');
+  });
+}
+
+// ---- 地雷（避雷清單） ----
+
+const WARN_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2zM12 10v5M12 18h.01"/></svg>';
+
+function avoidRow(avoid) {
+  return `
+    <button type="button" class="avoid" data-action="edit-avoid" data-id="${esc(avoid.id)}">
+      <span class="avoid-icon">${WARN_ICON}</span>
+      <span class="item-text">
+        <span class="item-name">${esc(avoid.title)}</span>
+        ${avoid.note ? `<span class="avoid-note">${esc(avoid.note)}</span>` : ''}
+      </span>
+    </button>`;
+}
+
+function renderAvoid() {
+  const avoids = state.avoids;
+  $('#view').innerHTML = `
+    <form id="avoid-form" class="avoid-add" novalidate>
+      <label class="field"><span>要避開的商品、店家或地方</span>
+        <input id="avoid-title" placeholder="例如 某某牌面膜" autocomplete="off" enterkeyhint="next">
+      </label>
+      <label class="field"><span>原因（可不填）</span>
+        <input id="avoid-note" placeholder="例如 味道很刺鼻、比別家貴" autocomplete="off" enterkeyhint="done">
+      </label>
+      <p class="field-error" id="avoid-error" hidden>請填要避開的項目。</p>
+      <button type="submit" class="btn btn-primary">加入地雷清單</button>
+    </form>
+    ${avoids.length ? `<section class="group">
+      <h2 class="group-title">地雷清單<span class="group-stats">${avoids.length} 項</span></h2>
+      ${avoids.map(avoidRow).join('')}
+    </section>
+    <p class="muted fine pad">${esc(country().name)}的所有清單共用，下次去${esc(country().name)}也看得到。點項目可以修改或刪除。</p>` : `<div class="empty-state">
+      <h2>還沒有地雷</h2>
+      <p>踩過的雷、聽說不好的東西記在這裡，下次就不會再買錯。</p>
+    </div>`}`;
+  $('#avoid-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = $('#avoid-title').value.trim();
+    $('#avoid-error').hidden = Boolean(title);
+    if (!title) {
+      $('#avoid-title').focus();
+      return;
+    }
+    await model.addAvoid(state.trip.countryCode, title, $('#avoid-note').value);
+    await refresh();
+    showToast('已加入地雷清單');
+  });
+}
+
+async function openAvoidSheet(id) {
+  const avoid = await get('avoids', id);
+  if (!avoid) return;
+  const sheet = openSheet(`
+    ${sheetHeader('編輯地雷')}
+    <form id="avoid-edit" novalidate>
+      <label class="field"><span>要避開的項目（必填）</span><input id="ae-title" value="${esc(avoid.title)}" autocomplete="off"></label>
+      <p class="field-error" id="ae-error" hidden>請填要避開的項目。</p>
+      <label class="field"><span>原因</span><textarea id="ae-note" rows="3">${esc(avoid.note)}</textarea></label>
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-danger" id="ae-delete">刪除</button>
+        <button type="submit" class="btn btn-primary">儲存</button>
+      </div>
+    </form>`);
+  $('#ae-delete', sheet).addEventListener('click', async () => {
+    const ok = await confirmDialog({ title: '刪除這個地雷？', body: `「${avoid.title}」會從地雷清單刪除。`, ok: '刪除', danger: true });
+    if (!ok) return;
+    await model.deleteAvoid(avoid.id);
+    closeSheet();
+    await refresh();
+    showToast('已刪除');
+  });
+  $('#avoid-edit', sheet).addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = $('#ae-title', sheet).value.trim();
+    $('#ae-error', sheet).hidden = Boolean(title);
+    if (!title) return;
+    await model.updateAvoid(avoid.id, { title, note: $('#ae-note', sheet).value });
     closeSheet();
     await refresh();
     showToast('已儲存');
@@ -1417,6 +1503,7 @@ const actions = {
   },
   'switch-trip': async (el) => { await model.setActiveTrip(el.dataset.id); state.cat = 'all'; await refresh(); },
   'toggle-task': async (el) => { await model.toggleTask(el.dataset.id); await refresh(); },
+  'edit-avoid': (el) => openAvoidSheet(el.dataset.id),
   'delete-category': async (el) => {
     const cat = state.categories.find((c) => c.id === el.dataset.id);
     if (!cat) return;

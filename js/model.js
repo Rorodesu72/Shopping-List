@@ -288,6 +288,28 @@ export async function deleteCategory(id) {
   await markChanged();
 }
 
+// ---- 避雷清單 ----
+// 依國家存放，同一個國家的所有旅程共用，下次去同一個國家還看得到。
+
+export async function addAvoid(countryCode, title, note = '') {
+  const avoid = { id: newId('avoid'), countryCode, title: title.trim(), note: note.trim(), createdAt: now(), updatedAt: now() };
+  await put('avoids', avoid);
+  await markChanged();
+  return avoid;
+}
+
+export async function updateAvoid(id, { title, note }) {
+  const avoid = await get('avoids', id);
+  if (!avoid) return;
+  await put('avoids', { ...avoid, title: title.trim(), note: (note || '').trim(), updatedAt: now() });
+  await markChanged();
+}
+
+export async function deleteAvoid(id) {
+  await remove('avoids', id);
+  await markChanged();
+}
+
 // ---- 行程準備 ----
 
 export async function addTask(tripId, title, note = '') {
